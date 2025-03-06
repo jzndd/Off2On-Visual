@@ -14,7 +14,7 @@ actor_critic_cfg:
   feature_dim: 512
   hidden_dim: 256
   img_size: ${env.train.size}
-  num_actions: 4
+  num_actions: 6
   depth: 3
 
 ppo_cfg:

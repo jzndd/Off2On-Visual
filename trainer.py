@@ -3,6 +3,7 @@ from pathlib import Path
 import random
 from typing import List, Tuple, Union
 from mw_wrapper_state import TorchEnv, make_mw_env
+from dmc_wrapper_state import get_d4rl_env
 import torch
 from omegaconf import DictConfig, OmegaConf
 import hydra
@@ -43,24 +44,31 @@ class Trainer:
         self.agent.to(self._device)
         self.agent.setup_training(cfg.actor_critic.actor_critic_loss)
 
-        self.best_success_rate = -0.01
+        self.metrics = -0.01
+
+        if self._cfg.task in ['button-press-topdown-v2', 'hammer-v2']:
+            self.registered_env_func = make_mw_env
+            self.domain_name = 'metaworld'
+        else:
+            self.registered_env_func = get_d4rl_env
+            self.domain_name = 'dmc'
 
     def run(self):
         cfg = self._cfg
-        train_env = make_mw_env(num_envs=cfg.collection.train.num_envs, device=self._device, **cfg.env.train)
+        train_env = self.registered_env_func(num_envs=cfg.collection.train.num_envs, device=self._device, **cfg.env.train)
     
         max_iter = self._cfg.training.online_max_iter
         bc_warmup_steps = self._cfg.training.bc_warmup_steps
 
         if self._cfg.expert_rb_dir is not None:
-            expertrb = OfflineReplaybuffer(5000, (39,))
+            expertrb = OfflineReplaybuffer(110000, (train_env.observation_space.shape[1],), (train_env.action_space.shape[1],))
             expertrb.load(self._cfg.expert_rb_dir)
             expertrb.compute_returns()
-            expertrb.state_normalizer()
-            self.obs_mean, self.obs_std = torch.tensor(expertrb.mean, device=self._device), torch.tensor(expertrb.std, device = self._device)
+            # expertrb.state_normalizer()
+            # self.obs_mean, self.obs_std = torch.tensor(expertrb.mean, device=self._device), torch.tensor(expertrb.std, device = self._device)
 
         # assert self._cfg.actor_critic.training.batch_size >= 1024  # PPO's batch_size >= 1024
-        rb = OnlineReplayBuffer(self._cfg.actor_critic.training.batch_size, (39,), 4)
+        rb = OnlineReplayBuffer(self._cfg.actor_critic.training.batch_size, (train_env.observation_space.shape[1],), (train_env.action_space.shape[1],))
 
         eps_rew = 0
         done = False
@@ -77,9 +85,8 @@ class Trainer:
                 for i in range(bc_warmup_steps):
                     metrics = self.agent.bc_update(expertrb)
 
-                to_log += self.test_actor_critic()
-                self.save_agents("bc", to_log[0]["actor_critic/test/success_rate"])
-                exit(1)
+                to_log += self.test_actor_critic(self._cfg.evaluation.eval_times)
+                self.save_agents("bc", to_log[0]["actor_critic/test/avg_reward"])
                 self.agent.bc_transfer_ac() 
 
                 obs, _ = train_env.reset()
@@ -101,8 +108,12 @@ class Trainer:
                 next_obs, rew, end, trunc, info = train_env.step(real_act)
                 step += 1
                 eps_rew += rew
-                done = torch.tensor(info['success'], device=self._device, dtype=torch.float32)
-                done = done or trunc or end
+                if self.domain_name == 'metaworld':
+                    done = torch.tensor(info['success'], device=self._device, dtype=torch.float32)
+                    done = done or trunc or end
+                else:
+                    done = end or trunc
+                    
                 rb.store(obs, next_obs, rew, done, real_act, old_log_prob, state_value)
 
             if done or trunc or end:
@@ -130,17 +141,17 @@ class Trainer:
             should_test = self._cfg.evaluation.should and (self.iter % self._cfg.evaluation.every_iter == 0)
             if should_test:
                 print("begin test")
-                to_log += self.test_actor_critic()
+                to_log += self.test_actor_critic(self._cfg.evaluation.eval_times)
 
             wandb_log(to_log, self.iter)
             to_log = []
 
     @torch.no_grad()
     def test_actor_critic(self, eval_times=25):
-        test_env = make_mw_env(num_envs=self._cfg.collection.test.num_envs, device=self._device, **self._cfg.env.test)
+        test_env = self.registered_env_func(num_envs=self._cfg.collection.test.num_envs, device=self._device, **self._cfg.env.test)
         total_reward = 0.0
         success_rate = 0.0
-        video_recorder = VideoRecorder(self._path_video_dir)
+        # video_recorder = VideoRecorder(self._path_video_dir)
         for i in range(eval_times):
             test_env.reset()
             done = False
@@ -149,9 +160,8 @@ class Trainer:
 
             seed = random.randint(0, 2**31 - 1)
             obs, _ = test_env.reset(seed=[seed + i for i in range(test_env.num_envs)])
-            obs = (obs - self.obs_mean) / (self.obs_std + 1e-8)
             enabled=True if i==eval_times-1 else False
-            video_recorder.init(test_env.render()[0], enabled=enabled)
+            # video_recorder.init(test_env.render()[0], enabled=enabled)
             success = False
             steps = 0
             # hx, cx = hx.detach(), cx.detach()
@@ -165,16 +175,18 @@ class Trainer:
 
                 # next_obs, rew, end, trunc, info = test_env.step(actual_act)
                 next_obs, rew, end, trunc, info = test_env.step(act)
-                video_recorder.record(test_env.render()[0])
+                # video_recorder.record(test_env.render()[0])
                 # import pdb; pdb.set_trace()
                 # video_recorder.save(f"{self.epoch}.mp4")
                 steps += 1
                 total_reward += rew.sum().item()
 
-                success |= bool(info['success'])
+                if self.domain_name == 'metaworld':
+                    success |= bool(info['success'])
+                
 
                 obs = next_obs
-                obs = (obs - self.obs_mean) / (self.obs_std + 1e-8)
+                # obs = (obs - self.obs_mean) / (self.obs_std + 1e-8)
 
                 if end or trunc:
                     break
@@ -182,26 +194,33 @@ class Trainer:
             if success:
                 success_rate += 1
 
-            video_recorder.save(f"{self.iter}.mp4")
-            print("the {} traj success is {} and steps is {}".format(i, success, steps))
+            metrics = success if self.domain_name == 'metaworld' else total_reward
+
+            # video_recorder.save(f"{self.iter}.mp4")
+            print("the {} traj , the reward/success is {} and steps is {}".format(i, metrics, steps))
 
 
         success_rate = success_rate / eval_times
         avg_reward = total_reward / eval_times
 
+        metrics = success_rate if self.domain_name == 'metaworld' else avg_reward
+
         # 如果存在 set_old_policy 方法，且成功率大于最佳成功率，则更新最佳成功率
-        if success_rate > self.best_success_rate:
-            self.best_success_rate = success_rate
-            self.save_agents("best", self.best_success_rate)
+        if metrics > self.metrics:
+            self.metrics = metrics
+            self.save_agents("best", self.metrics)
             if hasattr(self.agent, "set_old_policy"):
                 self.agent.set_old_policy()
 
-        to_log = [{"success_rate": success_rate, "avg_reward": avg_reward}]
+        if self.domain_name == 'metaworld':
+            to_log = [{"success_rate": success_rate, "avg_reward": avg_reward}]
+        else:
+            to_log = [{"avg_reward": avg_reward}]
         # import pdb; pdb.set_trace()
         # T H W C -> T C H W
-        save_frames = np.array(video_recorder.frames).transpose(0, 3, 1, 2)
-        video_wandb = wandb.Video(save_frames, fps=video_recorder.fps, format="mp4")
-        to_log.append({"video": video_wandb})
+        # save_frames = np.array(video_recorder.frames).transpose(0, 3, 1, 2)
+        # video_wandb = wandb.Video(save_frames, fps=video_recorder.fps, format="mp4")
+        # to_log.append({"video": video_wandb})
 
         print(f"Success rate: {success_rate}, Average reward: {avg_reward}")
         to_log = [{f"actor_critic/test/{k}": v for k, v in d.items()} for d in to_log]

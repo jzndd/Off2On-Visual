@@ -1,0 +1,10 @@
+train:
+  id: ${task}
+  size: [84, 84]
+  frame_skip: 1
+
+test:
+  id: ${task}
+  size: [84, 84]
+  frame_skip: 1
+

@@ -266,7 +266,7 @@ class PPOAgent(BaseAgent):
         self.K_epochs =  ppo_cfg.K_epochs
         self.mini_batch_size =  ppo_cfg.mini_batch_size
         self.max_grad_norm =  ppo_cfg.max_grad_norm
-        state_dim = 39
+        state_dim = 17
         ## network initialization
 
         self.actor = Actorlog(cfg, state_dim, use_trunk=False)

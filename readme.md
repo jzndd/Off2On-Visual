@@ -16,3 +16,10 @@ python main2D.py common.devices=[3] ac_type=ppo actor_critic.training.batch_size
 
 python main2D.py common.devices=[3] ac_type=ppo actor_critic.training.batch_size=1024 agent.ppo_cfg.mini_batch_size=128 task=button-press-topdown-v2
 '''
+
+
+python main.py task=halfcheetah-medium-v2 env=dmc actor_critic.training.batch_size=2048 agent.ppo_cfg.mini_batch_size=128
+
+python main.py task=halfcheetah-medium-v2 env=dmc  actor_critic.training.batch_size=2048 agent.ppo_cfg.mini_batch_size=256
+
+python main.py task=halfcheetah-medium-v2 env=dmc actor_critic.training.batch_size=1024 agent.ppo_cfg.mini_batch_size=128

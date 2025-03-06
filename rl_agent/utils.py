@@ -121,7 +121,7 @@ def schedule(schdl, step):
     raise NotImplementedError(schdl)
 
 class OnlineReplayBuffer:
-    def __init__(self, capacity, obs_shape, act_dim):
+    def __init__(self, capacity, obs_shape, action_shape):
         """
         Initializes the ReplayBuffer.
 
@@ -139,7 +139,7 @@ class OnlineReplayBuffer:
         self.next_obs = torch.zeros((capacity, *obs_shape), dtype=torch.float32)
         self.rew = torch.zeros((capacity, 1), dtype=torch.float32)
         self.done = torch.zeros((capacity, 1), dtype=torch.float32)
-        self.act = torch.zeros((capacity, act_dim), dtype=torch.float32)
+        self.act = torch.zeros((capacity, *action_shape), dtype=torch.float32)
         self.old_log_prob = torch.zeros((capacity, 1), dtype=torch.float32)
         self.state_value = torch.zeros((capacity, 1), dtype=torch.float32)
 
@@ -236,7 +236,7 @@ class OnlineReplayBuffer:
     
 
 class OfflineReplaybuffer:
-    def __init__(self, capacity, obs_shape=(3, 84, 84), act_dim=4):
+    def __init__(self, capacity, obs_shape=(3, 84, 84), action_shape=(4,)):
         """
         Initializes the ReplayBuffer.
 
@@ -254,7 +254,7 @@ class OfflineReplaybuffer:
         self.obs_ = np.zeros((capacity, *obs_shape), dtype=np.float32)
         self.rew = np.zeros((capacity, 1), dtype=np.float32)
         self.done = np.zeros((capacity, 1), dtype=np.float32)
-        self.act = np.zeros((capacity, act_dim), dtype=np.float32)
+        self.act = np.zeros((capacity, *action_shape), dtype=np.float32)
 
         self.returns = None
 
