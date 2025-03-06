@@ -1,0 +1,92 @@
+defaults:
+  - _self_
+  - env: metaworld
+  - agent: metaworld
+
+debug_mode: false
+seed: 0
+task: hammer-v2
+
+hydra:
+  run:
+    dir: outputs/${now:%Y.%m.%d}/${now:%H%M%S}_${wandb.group}
+  job:
+    chdir: True  # Don't change the working directory to the output folder
+
+common:
+  devices: [6]  # int, list of int, cpu, or all 
+  seed: ${seed}
+  resume: False # do not modify, set by scripts/resume.sh only.
+
+ac_type: ppo  # Optional[ppo, bc, iql]
+offline_buffer: /DATA/disk0/jzn/rl_alg_impl_proj/data/${task}/expert_rb_with_reward_state.pkl
+expert_rb_dir: ${offline_buffer}
+
+wandb:
+  mode: online
+  project: offline2online-metaworld_${task}
+  entity: jzndd1
+  name: seed${seed}_bs${actor_critic.training.batch_size}_minibs${agent.ppo_cfg.mini_batch_size}
+  group: ${ac_type}_state
+  notes: null
+
+initialization:
+  path_to_ckpt: null
+  load_denoiser: True
+  load_rew_end_model: True
+  load_actor_critic: True
+
+checkpointing:
+  save_agent_every: 2000
+  num_to_keep: 11  # number of checkpoints to keep, use null to disable
+
+collection:
+  train:
+    num_envs: 1
+    epsilon: 0.01
+    num_steps_total: 100000
+    first_epoch:
+      min: 10000
+      max: 5000  # null: no maximum
+      threshold_rew: 10
+    steps_per_epoch: 5000
+  test:
+    num_envs: 1
+    num_episodes: 4
+    epsilon: 0.0
+    num_final_episodes: 100
+
+# FOR VRL3, try 30000(offline) + 3e6(online)
+training:
+  should: True
+  online_max_iter: 3000000 # 3M for VRL3, ppo ; 2e5 for IQL
+  bc_warmup_steps: 10000    # just for PPO
+  offline_steps: 50000     # 5w for VRL3, ppo ; 2e5 for IQL
+
+evaluation:
+  should: True
+  every: 5
+  every_iter: 5000
+
+actor_critic:
+  training:
+    sample_weights: null
+    batch_size: 256
+    grad_acc_steps: 1
+    start_after_epochs: 0
+    steps_first_epoch: 400
+    steps_per_epoch: 400
+    lr_warmup_steps: 100
+    max_grad_norm: 0.5
+
+  actor_critic_loss:
+    _target_: models.rl_agent.ppo_agent.ActorCriticLossConfig
+    backup_every: 15
+    gamma: 0.985
+    lambda_: 0.95
+    weight_value_loss: 1.0
+    weight_entropy_loss: 0.001
+    weight_bc_loss: 1.0
+    is_continuous_action: true
+
+

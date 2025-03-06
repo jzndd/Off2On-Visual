@@ -1,0 +1,26 @@
+_target_: agent.AgentConfig
+
+denoiser: null
+
+
+upsampler: null
+
+# rew_end_model: null
+rew_end_model: null
+
+actor_critic_cfg: 
+  _target_: rl_agent.baseagent.ActorCriticConfig
+  type: ${ac_type}
+  feature_dim: 512
+  hidden_dim: 256
+  img_size: ${env.train.size}
+  num_actions: 4
+  depth: 3
+
+ppo_cfg:
+  _target_: models.rl_agent.baseagent.PPOConfig
+  mini_batch_size: 256
+  clip_param: 0.2
+  K_epochs: 6
+  max_grad_norm: 0.5 
+  
