@@ -114,21 +114,20 @@ class IQLCritic(nn.Module):
         v_depth: int = 3,
         v_lr: float = 1e-4,
         omega: float = 0.7,
+        use_trunk: bool = True,
     ) -> None:
         
         super().__init__()
         state_dim = repr_dim
-        feature_dim = cfg.feature_dim
-        action_dim = 4
         self._omega = omega
 
         # init double Q
-        self._Q = DoubleQMLP(state_dim, feature_dim, action_dim, q_hidden_dim, q_depth)
-        self._target_Q = DoubleQMLP(state_dim, feature_dim, action_dim, q_hidden_dim, q_depth)
+        self._Q = DoubleQMLP(cfg, state_dim, use_trunk=use_trunk)
+        self._target_Q = DoubleQMLP(cfg, state_dim, use_trunk=use_trunk)
         self._target_Q.load_state_dict(self._Q.state_dict())
 
         #for v
-        self._value = ValueMLP(state_dim, feature_dim, v_hidden_dim, v_depth)
+        self._value = ValueMLP(cfg, state_dim, use_trunk=use_trunk)
         self._total_update_step = 0
         self._target_update_freq = target_update_freq
         self._tau = tau
@@ -202,6 +201,16 @@ class IQLCritic(nn.Module):
         adv = q - v
         adv = (adv - adv.mean()) / (adv.std() + 1e-8)
         return adv
+
+    def transbc2online(self):
+        self._v_optimizer = torch.optim.Adam(
+            self._value.parameters(), 
+            lr=2e-5,
+            )
+        self._q_optimizer = torch.optim.Adam(
+            self._Q.parameters(),
+            lr=2e-5,
+            )
     
 # ---------------------------- Actor ---------------------------- #
 
@@ -210,7 +219,7 @@ class Actor(nn.Module):
         super().__init__()
 
         # default params
-        action_dim = 4
+        action_dim = cfg.num_actions
         feature_dim = cfg.feature_dim
         hidden_dim = cfg.hidden_dim
         self.use_trunk = use_trunk
@@ -259,7 +268,7 @@ class Actor(nn.Module):
         return dist, pretanh
     
 class Actorlog(nn.Module):
-    def __init__(self, cfg: ActorCriticConfig, repr_dim, use_trunk=True) -> None:
+    def __init__(self, cfg: ActorCriticConfig, repr_dim, use_trunk=True, use_std_share_network=False) -> None:
         super().__init__()
 
         self.use_trunk = use_trunk
@@ -269,7 +278,13 @@ class Actorlog(nn.Module):
             input_dim = cfg.feature_dim
         else:
             input_dim = repr_dim
-        self.actor_linear = MLP(input_dim, cfg.hidden_dim, cfg.depth, cfg.num_actions * 2, final_activation="tanh")
+
+        self.use_std_share_network = use_std_share_network
+        if self.use_std_share_network:
+            self.actor_linear = MLP(input_dim, cfg.hidden_dim, cfg.depth, cfg.num_actions * 2, final_activation="tanh")
+        else:
+            self.actor_linear = MLP(input_dim, cfg.hidden_dim, cfg.depth, cfg.num_actions, final_activation="tanh")
+            self.log_std = nn.Parameter(torch.zeros(1, cfg.num_actions))
 
     def get_action(self, x: Tensor, eval_mode=False) -> Tensor:
         mean, std = self.forward(x)
@@ -291,14 +306,19 @@ class Actorlog(nn.Module):
     def forward(self, x: Tensor):
         if self.use_trunk:
             x = self.trunk(x)
-        output = self.actor_linear(x)  # mean and std
-        mean, log_std = output.split(output.shape[1] // 2, dim=1)
+
+        if self.use_std_share_network:
+            output = self.actor_linear(x)  # mean and std
+            mean, log_std = output.split(output.shape[1] // 2, dim=1)
+        else:
+            mean = self.actor_linear(x)
+            log_std = self.log_std.expand_as(mean)
+
         # log_std_clip
-        log_std = log_std.clamp(-20, 2)
+        log_std = log_std.clamp(-5, 0.)
         std = log_std.exp()
         
         return mean, std
-    
 
 # ---------------------------- Encoder ---------------------------- #
 class ActorCriticEncoder(nn.Module):

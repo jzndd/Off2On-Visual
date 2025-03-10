@@ -47,6 +47,9 @@ class D4RLWrapper(gymnasium.Wrapper):
     def render(self, render_mode: str = 'rgb_array') -> np.ndarray:
         return self.render()
     
+    def get_normalized_score(self, score: float) -> float:
+        return self.env.get_normalized_score(score)
+    
     # def _to_tensor(self, x: Any) -> torch.Tensor:
     #     if isinstance(x, np.ndarray):
     #         return torch.tensor(x, dtype=torch.float32, device=self.device)
@@ -66,7 +69,8 @@ class TorchEnv(gymnasium.Wrapper):
         else:
             raise ValueError("The observation space should have 2 or 4 dimensions")
 
-        self.num_actions = 6
+        self.num_actions = env.action_space.shape[1]
+        self.num_states = env.observation_space.shape[1]
 
         # if len(env.observation_space.shape) == 4:
         #     self.observation_space = gymnasium.spaces.Box(low=-1, high=1, shape=(b, c, h, w))
@@ -93,6 +97,9 @@ class TorchEnv(gymnasium.Wrapper):
             return torch.tensor(x, dtype=torch.uint8, device=self.device)
         else:
             return torch.tensor(x, dtype=torch.float32, device=self.device)
+        
+    def get_normalized_score(self, score: float) -> float:
+        return self.env.env_fns[0]().get_normalized_score(score) * 100
 
 def get_d4rl_env(id: str, frame_skip: int = 1, device: torch.device = torch.device("cuda"), num_envs=1, size=(84,), max_episode_steps=None) -> D4RLWrapper:
     if isinstance(size, ListConfig):
@@ -111,7 +118,7 @@ def get_d4rl_env(id: str, frame_skip: int = 1, device: torch.device = torch.devi
     return env
 
 if __name__ == "__main__":
-    env = get_d4rl_env("halfcheetah-medium-v2")
+    env = get_d4rl_env("walker2d-medium-v2")
     obs, info = env.reset()
     print(obs)
     print(env.observation_space)
@@ -120,5 +127,8 @@ if __name__ == "__main__":
     actions = torch.rand((1, 6))
     obs, rew, end, trunc, info = env.step(actions)
     print(obs)
+
+    score = env.get_normalized_score(1000)
+    print(score)
     # print(env.step(env.action_space.sample()))
     # print(env.render())

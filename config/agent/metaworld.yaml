@@ -14,7 +14,8 @@ actor_critic_cfg:
   feature_dim: 512
   hidden_dim: 256
   img_size: ${env.train.size}
-  num_actions: 6
+  num_actions: ???
+  num_states: ???
   depth: 3
 
 ppo_cfg:
@@ -22,5 +23,6 @@ ppo_cfg:
   mini_batch_size: 256
   clip_param: 0.2
   K_epochs: 6
-  max_grad_norm: 0.5 
+  max_grad_norm: 0.5
+  adv_compute_mode: 'q-v' 
   

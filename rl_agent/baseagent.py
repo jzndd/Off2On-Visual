@@ -33,6 +33,7 @@ class ActorCriticConfig:
     depth: int = 3
     type: str = None
     num_actions: Optional[int] = None
+    num_states:  Optional[int] = None
     is_continuous_action: Optional[bool] = True
     
 class BaseAgent(nn.Module):

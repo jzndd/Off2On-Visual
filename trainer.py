@@ -1,3 +1,4 @@
+from copy import deepcopy
 import os
 from pathlib import Path
 import random
@@ -39,19 +40,23 @@ class Trainer:
         self._save_path = Path("saved_models")
         self._save_path.mkdir(parents=True, exist_ok=True)
 
-        # init agent
-        self.agent: PPOAgent = PPOAgent(cfg.agent.actor_critic_cfg, cfg.agent.ppo_cfg)
-        self.agent.to(self._device)
-        self.agent.setup_training(cfg.actor_critic.actor_critic_loss)
-
-        self.metrics = -0.01
-
         if self._cfg.task in ['button-press-topdown-v2', 'hammer-v2']:
             self.registered_env_func = make_mw_env
             self.domain_name = 'metaworld'
         else:
             self.registered_env_func = get_d4rl_env
             self.domain_name = 'dmc'
+
+        env = self.registered_env_func(num_envs=1,  device=self._device, **cfg.env.train)
+        cfg.agent.actor_critic_cfg.num_actions = deepcopy(env.num_actions)
+        cfg.agent.actor_critic_cfg.num_states = deepcopy(env.num_states)
+
+        # init agent
+        self.agent: PPOAgent = PPOAgent(cfg.agent.actor_critic_cfg, cfg.agent.ppo_cfg)
+        self.agent.to(self._device)
+        self.agent.setup_training(cfg.actor_critic.actor_critic_loss)
+
+        self.metrics = -0.01
 
     def run(self):
         cfg = self._cfg
@@ -113,7 +118,7 @@ class Trainer:
                     done = done or trunc or end
                 else:
                     done = end or trunc
-                    
+
                 rb.store(obs, next_obs, rew, done, real_act, old_log_prob, state_value)
 
             if done or trunc or end:
@@ -214,15 +219,17 @@ class Trainer:
 
         if self.domain_name == 'metaworld':
             to_log = [{"success_rate": success_rate, "avg_reward": avg_reward}]
+            norm_reward = 0.0
         else:
-            to_log = [{"avg_reward": avg_reward}]
+            norm_reward = test_env.get_normalized_score(avg_reward)
+            to_log = [{"avg_reward": avg_reward, "norm_reward": norm_reward}]
         # import pdb; pdb.set_trace()
         # T H W C -> T C H W
         # save_frames = np.array(video_recorder.frames).transpose(0, 3, 1, 2)
         # video_wandb = wandb.Video(save_frames, fps=video_recorder.fps, format="mp4")
         # to_log.append({"video": video_wandb})
 
-        print(f"Success rate: {success_rate}, Average reward: {avg_reward}")
+        print(f"Success rate: {success_rate}, Average reward: {avg_reward}, Normalized reward: {norm_reward}")
         to_log = [{f"actor_critic/test/{k}": v for k, v in d.items()} for d in to_log]
         print("end test actor_critic")
 

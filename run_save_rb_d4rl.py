@@ -15,7 +15,7 @@ def store_d4rl_dataset(env_name: str, buffer: OfflineReplaybuffer, file_save_pat
         env_name (str): Name of the D4RL environment.
         buffer (OfflineReplaybuffer): The replay buffer to store the dataset.
     """
-    env = gym.make("halfcheetah-medium-v2")
+    env = gym.make(env_name)
     dataset = env.get_dataset()
 
     # Extract transitions
@@ -42,7 +42,7 @@ def store_d4rl_dataset(env_name: str, buffer: OfflineReplaybuffer, file_save_pat
     # file_save_path
 
 # Example usage
-env_name = "halfcheetah-medium-v2"  # Change this to your desired D4RL environment
+env_name = "walker2d-medium-v2"  # Change this to your desired D4RL environment
 file_save_path = f"data/{env_name}"
 import os
 os.makedirs(file_save_path, exist_ok=True)

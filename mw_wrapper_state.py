@@ -182,6 +182,7 @@ class TorchEnv(gymnasium.Wrapper):
             raise ValueError("The observation space should have 2 or 4 dimensions")
 
         self.num_actions = env.action_space.shape[1]
+        self.num_states = env.observation_space.shape[1]
 
         if len(env.observation_space.shape) == 4:
             self.observation_space = gymnasium.spaces.Box(low=-1, high=1, shape=(b, c, h, w))

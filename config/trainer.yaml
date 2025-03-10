@@ -27,7 +27,7 @@ wandb:
   project: offline2online-metaworld_${task}
   entity: jzndd1
   name: seed${seed}_bs${actor_critic.training.batch_size}_minibs${agent.ppo_cfg.mini_batch_size}
-  group: ${ac_type}_state
+  group: ${ac_type}_state_${agent.ppo_cfg.adv_compute_mode}
   notes: null
 
 initialization:
@@ -86,7 +86,7 @@ actor_critic:
     gamma: 0.985
     lambda_: 0.95
     weight_value_loss: 1.0
-    weight_entropy_loss: 0.001
+    weight_entropy_loss: 0.01
     weight_bc_loss: 1.0
     is_continuous_action: true
 

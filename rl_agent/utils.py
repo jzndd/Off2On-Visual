@@ -6,6 +6,11 @@ from torch import nn
 import re
 import numpy as np
 
+def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
+    torch.nn.init.orthogonal_(layer.weight, std)
+    torch.nn.init.constant_(layer.bias, bias_const)
+    return layer
+
 def to_torch(xs, device):
     return tuple(torch.as_tensor(x, device=device) if x is not None else x for x in xs)
 
@@ -233,6 +238,26 @@ class OnlineReplayBuffer:
             running_return = self.rew[t] + gamma * running_return * (1 - self.done[t])
             returns[t] = running_return
         self.returns = torch.tensor(returns, dtype=torch.float32)
+
+    def sample_all(self):
+        """
+        Returns all the transitions stored in the buffer.
+        return obs, act, rew, done, next_obs
+        """
+        result = (self.obs[:self.size], self.act[:self.size], self.rew[:self.size], self.next_obs[:self.size], self.done[:self.size])
+        if self.old_log_prob.sum() != 0:
+            result += (self.old_log_prob[:self.size],)
+        else:
+            result += (None,)
+
+        if self.state_value.sum() != 0:
+            result += (self.state_value[:self.size],)
+        else:
+            result += (None,)
+        
+        return result
+        
+        # return self.obs[:self.size], self.act[:self.size], self.rew[:self.size], self.done[:self.size], self.next_obs[:self.size]
     
 
 class OfflineReplaybuffer:
