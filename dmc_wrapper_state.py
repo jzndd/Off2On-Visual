@@ -9,7 +9,7 @@ import gymnasium
 from gymnasium.vector import AsyncVectorEnv
 
 class D4RLWrapper(gymnasium.Wrapper):
-    def __init__(self, env_name: str, frame_skip: int = 2):
+    def __init__(self, env_name: str, frame_skip: int = 2, max_episode_steps=None):
         env = gym.make(env_name)
         super().__init__(env)
         
@@ -17,6 +17,8 @@ class D4RLWrapper(gymnasium.Wrapper):
         self.frame_skip = frame_skip
         self.observation_space = Box(low=-1, high=1, shape=env.observation_space.shape)
         self.action_space = Box(low=-1, high=1, shape=(env.action_space.shape[0],))
+        
+        self._max_episode_steps = max_episode_steps if max_episode_steps is not None else env._max_episode_steps
     
     def reset(self, seed: int | None = None, options: dict[str, Any] | None = None) -> Tuple[np.ndarray, Dict[str, Any]]:
         """Fix: Ensure reset returns (obs, info)"""
@@ -28,14 +30,19 @@ class D4RLWrapper(gymnasium.Wrapper):
     def step(self, action: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, Dict[str, Any]]:
         total_reward = 0.0
         done, truncated = False, False
+        step = 0
         
         for _ in range(self.frame_skip):
             info_tuple = self.env.step(action)
-            if len(info_tuple) == 4:
-                obs, reward, done, info = info_tuple
-                truncated = False
-            else:
-                obs, reward, done, truncated, info = info_tuple
+            obs, reward, done, info = info_tuple
+            step += 1
+            # if len(info_tuple) == 4:
+            #     obs, reward, done, info = info_tuple
+            #     truncated = False
+            # else:
+            #     obs, reward, done, truncated, info = info_tuple
+            if step == self._max_episode_steps:
+                truncated = True
 
             total_reward += reward
             if done or truncated:

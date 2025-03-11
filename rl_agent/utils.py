@@ -148,7 +148,9 @@ class OnlineReplayBuffer:
         self.old_log_prob = torch.zeros((capacity, 1), dtype=torch.float32)
         self.state_value = torch.zeros((capacity, 1), dtype=torch.float32)
 
-    def store(self, obs, next_obs, rew, done, act, old_log_prob=None, state_value=None):
+        self.dw = torch.zeros((capacity, 1), dtype=torch.float32)
+
+    def store(self, obs, next_obs, rew, done, act, old_log_prob=None, state_value=None, dw=None):
         """
         Stores a transition in the buffer.
 
@@ -176,6 +178,8 @@ class OnlineReplayBuffer:
                 self.old_log_prob[self.ptr] = old_log_prob[i]
             if state_value is not None:
                 self.state_value[self.ptr] = state_value[i]
+            if dw is not None:
+                self.dw[self.ptr] = dw[i]
 
         # Update pointer and size
         self.ptr = (self.ptr + 1) % self.capacity
@@ -207,6 +211,8 @@ class OnlineReplayBuffer:
             result += (self.state_value[indices],)
         else:
             result += (None,)
+
+        result += (self.dw[indices],)
         # batch = {
         #     'obs': self.obs[indices],
         #     'next_obs': self.next_obs[indices],
@@ -254,6 +260,8 @@ class OnlineReplayBuffer:
             result += (self.state_value[:self.size],)
         else:
             result += (None,)
+
+        result += (self.dw[:self.size],)
         
         return result
         

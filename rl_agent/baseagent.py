@@ -35,6 +35,8 @@ class ActorCriticConfig:
     num_actions: Optional[int] = None
     num_states:  Optional[int] = None
     is_continuous_action: Optional[bool] = True
+    acitive_fn: Optional[str] = "tanh"
+    online_lr: Optional[float] = 3e-6
     
 class BaseAgent(nn.Module):
     def __init__(self, cfg: ActorCriticConfig) -> None:

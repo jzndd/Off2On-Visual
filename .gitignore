@@ -6,3 +6,8 @@ rl_agent/__pycache__/*
 
 rl_agent/__pycache__/ppo_agent.cpython-310.pyc
 rl_agent/__pycache__/utils.cpython-310.pyc
+
+
+ckpt/*
+
+*.sh

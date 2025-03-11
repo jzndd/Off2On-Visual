@@ -85,7 +85,7 @@ class ValueMLP(nn.Module):
             input_dim = cfg.feature_dim
         else:
             input_dim = repr_dim
-        self._net = MLP(input_dim, cfg.hidden_dim, cfg.depth, 1)
+        self._net = MLP(input_dim, cfg.hidden_dim, cfg.depth, 1, activation=cfg.acitive_fn, final_activation="tanh")
 
     def forward(
         self, s: torch.Tensor
@@ -104,14 +104,10 @@ class IQLCritic(nn.Module):
         # state_dim: int,
         # feature_dim: int,
         # action_dim: int,
-        q_hidden_dim: int = 256,
-        q_depth: int = 3,
         Q_lr: float = 1e-4,
         target_update_freq: int = 2,
         tau: float = 0.005,
         gamma: float = 0.99,
-        v_hidden_dim: int = 256,
-        v_depth: int = 3,
         v_lr: float = 1e-4,
         omega: float = 0.7,
         use_trunk: bool = True,
@@ -202,19 +198,19 @@ class IQLCritic(nn.Module):
         adv = (adv - adv.mean()) / (adv.std() + 1e-8)
         return adv
 
-    def transbc2online(self):
+    def transbc2online(self, online_lr: float = 3e-6):
         self._v_optimizer = torch.optim.Adam(
             self._value.parameters(), 
-            lr=2e-5,
+            lr=online_lr,
             )
         self._q_optimizer = torch.optim.Adam(
             self._Q.parameters(),
-            lr=2e-5,
+            lr=online_lr,
             )
     
 # ---------------------------- Actor ---------------------------- #
 
-class Actor(nn.Module):
+class VRL3Actor(nn.Module):
     def __init__(self, cfg: ActorCriticConfig, repr_dim, use_trunk=True) -> None:
         super().__init__()
 
@@ -281,9 +277,9 @@ class Actorlog(nn.Module):
 
         self.use_std_share_network = use_std_share_network
         if self.use_std_share_network:
-            self.actor_linear = MLP(input_dim, cfg.hidden_dim, cfg.depth, cfg.num_actions * 2, final_activation="tanh")
+            self.actor_linear = MLP(input_dim, cfg.hidden_dim, cfg.depth, cfg.num_actions * 2, activation=cfg.acitive_fn, final_activation="tanh")
         else:
-            self.actor_linear = MLP(input_dim, cfg.hidden_dim, cfg.depth, cfg.num_actions, final_activation="tanh")
+            self.actor_linear = MLP(input_dim, cfg.hidden_dim, cfg.depth, cfg.num_actions, activation=cfg.acitive_fn, final_activation="tanh")
             self.log_std = nn.Parameter(torch.zeros(1, cfg.num_actions))
 
     def get_action(self, x: Tensor, eval_mode=False) -> Tensor:
@@ -315,7 +311,7 @@ class Actorlog(nn.Module):
             log_std = self.log_std.expand_as(mean)
 
         # log_std_clip
-        log_std = log_std.clamp(-5, 0.)
+        # log_std = log_std.clamp(-5, 0.)
         std = log_std.exp()
         
         return mean, std

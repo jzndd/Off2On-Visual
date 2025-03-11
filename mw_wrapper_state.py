@@ -131,7 +131,7 @@ class MetaWorldEnv(gymnasium.Env):
                 break
 
         if self.cur_step >= self.max_episode_steps:
-            terminated = True
+            truncated = True
 
         return state, total_reward, terminated, truncated, info
 

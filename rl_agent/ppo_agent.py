@@ -30,10 +30,12 @@ from copy import deepcopy
 @dataclass
 class PPOConfig:
     clip_param: float = 0.2
-    K_epochs: int = 6
+    K_epochs: int = 10
     mini_batch_size: int = 256
     max_grad_norm: float = 0.5
     adv_compute_mode: str = "tradition" # optional:"tradition", "gae", "q-v" 
+    use_adam_eps: bool = True
+    use_std_share_network: bool = False
 
 class PPOAgent2D(BaseAgent):
     def __init__(
@@ -55,7 +57,7 @@ class PPOAgent2D(BaseAgent):
 
         ## network initialization
         self.encoder = ActorCriticEncoder()
-        self.actor = Actorlog(cfg, self.encoder.repr_dim, use_std_share_network=False)
+        self.actor = Actorlog(cfg, self.encoder.repr_dim, use_std_share_network=ppo_cfg.use_std_share_network)
         # self.actor_opt = optim.Adam(self.actor.parameters(), lr=1e-4)
         # self.encoder_opt = optim.Adam(self.encoder.parameters(), lr=1e-4)
 
@@ -216,17 +218,6 @@ class PPOAgent2D(BaseAgent):
                 surrogate = -advantages[index] * torch.exp(log_prob - old_log_probs[index].detach())
                 surrogate_clipped = -advantages[index] * torch.clamp(torch.exp(log_prob - old_log_probs[index].detach()),
                                                        1.0 - self.clip_param, 1.0 + self.clip_param)
-                # if batch is not None:
-                #     expert_obs, expert_act, _, _, _ = batch.sample(mini_batch_size=256)
-                #     expert_act, expert_obs = expert_act.to(self.device), expert_obs.to(self.device)
-                #     expert_x = self.encoder(expert_obs)
-                #     expert_x = expert_x.flatten(start_dim=1)
-                #     dist = self.actor.get_dist(expert_x)
-                #     log_prob = dist.log_prob(expert_act)
-                #     bc_loss = -log_prob.sum(dim=-1).mean()
-                #     bc_loss = c.weight_bc_loss * bc_loss
-                # else:
-                #     bc_loss = 0.0
                 
                 policy_loss = torch.max(surrogate, surrogate_clipped).mean() + entropy_loss
 
@@ -270,27 +261,30 @@ class PPOAgent(BaseAgent):
         self.max_grad_norm =  ppo_cfg.max_grad_norm
         state_dim = cfg.num_states
         self.gae_lambda = 0.95
+
+        self.ppo_cfg = ppo_cfg
         ## network initialization
 
-        self.actor = Actorlog(cfg, state_dim, use_trunk=False)
+        self.online_lr = cfg.online_lr
+
+        self.actor = Actorlog(cfg, state_dim, use_trunk=False, use_std_share_network=ppo_cfg.use_std_share_network)
+        self.actor_optim = optim.Adam(self.actor.parameters(), lr=1e-4)
 
         self.adv_compute_mode = ppo_cfg.adv_compute_mode
-
-        optimizer_list = list(self.actor.parameters())
 
         if self.adv_compute_mode in ['tradition', 'q-v', 'gae']:
             # use GAE to estimate the advantage
             self.value = ValueMLP(cfg, state_dim, use_trunk=False)
-            optimizer_list += list(self.value.parameters())
+            self.value_optim = optim.Adam(self.value.parameters(), lr=1e-4)
             if self.adv_compute_mode == 'q-v':
                 self.doubleq = DoubleQMLP(cfg, state_dim, use_trunk=False)
-                optimizer_list += list(self.doubleq.parameters())
+                self.doubleq_optim = optim.Adam(self.doubleq.parameters(), lr=1e-4)
         elif self.adv_compute_mode == 'iql':
             self.critic = IQLCritic(cfg, state_dim, use_trunk=False) 
         else:
             raise NotImplementedError
 
-        self.optimizer = optim.Adam(optimizer_list, lr=1e-4)
+
 
         # self.use_old_policy = use_old_policy
         # if self.use_old_policy:
@@ -309,72 +303,77 @@ class PPOAgent(BaseAgent):
             # When tradition, return both action and state_value
             return *self.actor.get_action(obs, eval_mode=eval_mode), self.value(obs)
         return self.actor.get_action(obs, eval_mode=eval_mode)
-    
-    def bc_update(self, rb):
+
+    def bc_actor_update(self, rb: OfflineReplaybuffer):
 
         c = self.loss_cfg
+        bacth = rb.sample(mini_batch_size=256)
 
-        if isinstance(rb, OfflineReplaybuffer):
+        obs, act, reward, done, returns, obs_ = to_torch(bacth, self.device)
 
-            # update policy
-            bacth = rb.sample(mini_batch_size=256)
-            obs, act, reward, done, returns, obs_ = to_torch(bacth, self.device)
-            # obs, act, reward, done, returns, obs_ = rb.sample(mini_batch_size=256)
+        dist = self.actor.get_dist(obs)
+        log_prob = dist.log_prob(act)
+        bc_loss = -log_prob.sum(dim=-1).mean() 
+        bc_loss = c.weight_bc_loss * bc_loss
 
-            # x = x.flatten(start_dim=1)
-            dist = self.actor.get_dist(obs)
-            log_prob = dist.log_prob(act)
-            bc_loss = -log_prob.sum(dim=-1).mean() 
-            bc_loss = c.weight_bc_loss * bc_loss
+        self.actor_optim.zero_grad()
+        bc_loss.backward()
+        self.actor_optim.step()
 
-            # self.actor_opt.zero_grad()
-            # self.encoder_opt.zero_grad()
-            # bc_loss.backward()
-            # self.actor_opt.step()
-            # self.encoder_opt.step()
+    def bc_critic_update(self, rb: OfflineReplaybuffer):
 
-            # update critic network and freeze the encoder network
-            if self.adv_compute_mode in ['tradition', 'q-v', 'gae']:
-                val = self.value(obs)
-                value_loss = F.mse_loss(val, returns)
-                q_loss = torch.tensor(0.0)
+        c = self.loss_cfg
+        bacth = rb.sample(mini_batch_size=256)
 
-                if self.adv_compute_mode == 'q-v':
-                    with torch.no_grad():
-                        act_ = self.actor.get_action(obs_, eval_mode=True)
-                        target_q = reward + (1-done) * 0.99 * torch.min(*self.doubleq(obs_, act_))
-                    q1, q2 = self.doubleq(obs, act)
-                    q_loss = 0.5 * F.mse_loss(q1, target_q) + 0.5 * F.mse_loss(q2, target_q)
-            else:
-                self.critic: IQLCritic
-                q_loss, value_loss = self.critic.update(obs, act, reward, 1-done, obs_)
-            # bc_loss = c.weight_bc_loss * self.bc_loss(pred_act, act)
+        obs, act, reward, done, returns, obs_ = to_torch(bacth, self.device)
 
-        loss = bc_loss + 0.5 * value_loss + 0.5 * q_loss
+        if self.adv_compute_mode in ['tradition', 'q-v', 'gae']:
+            val = self.value(obs)
+            value_loss = F.mse_loss(val, returns)
 
-        self.optimizer.zero_grad()
-        loss.backward()
-        self.optimizer.step()
+            self.value_optim.zero_grad()
+            value_loss.backward()
+            self.value_optim.step()
 
-        return {"bc_loss":bc_loss.item(), 'value_loss':value_loss.item(), "q_loss":q_loss.item()}   
+            if self.adv_compute_mode == 'q-v':
+                with torch.no_grad():
+                    act_ = self.actor.get_action(obs_, eval_mode=True)
+                    target_q = reward + (1-done) * 0.99 * torch.min(*self.doubleq(obs_, act_))
+                q1, q2 = self.doubleq(obs, act)
+                q_loss = 0.5 * F.mse_loss(q1, target_q) + 0.5 * F.mse_loss(q2, target_q)
+
+                self.doubleq_optim.zero_grad()
+                q_loss.backward()
+                self.doubleq_optim.step()
+
+        elif self.adv_compute_mode == 'iql':
+            self.critic.update(obs, act, reward, 1-done, obs_)
     
     def bc_transfer_ac(self):
+
+        del self.actor_optim
+
         params_list = list(self.actor.parameters())
         if self.adv_compute_mode in ['tradition', 'q-v', 'gae']:
+            del self.value_optim
             params_list += list(self.value.parameters())
             if self.adv_compute_mode == 'q-v':
+                del self.doubleq_optim
                 params_list += list(self.doubleq.parameters())
         elif self.adv_compute_mode == 'iql':
-            self.critic.transbc2online()
+            self.critic.transbc2online(self.online_lr)
 
-        self.optimizer = optim.Adam(params_list, lr=2e-6)
+        if self.ppo_cfg.use_adam_eps:
+            self.optimizer = optim.Adam(params_list, lr=self.online_lr, eps=1e-5)
+        else:
+            self.optimizer = optim.Adam(params_list, lr=self.online_lr)
     
-    def update(self, rb: OnlineReplayBuffer, batch=None):
+    def update(self, rb: OnlineReplayBuffer, iter=None, max_iter=None):
 
         c = self.loss_cfg
     
         batch = rb.sample_all()
-        obss, acts, rews, next_obss, dones, old_log_probs, old_state_values = to_torch(batch, self.device)
+        obss, acts, rews, next_obss, dones, old_log_probs, old_state_values, dws = to_torch(batch, self.device)
 
         # old_log_probs = old_log_probs.squeeze(-1)
         old_state_values = old_state_values.squeeze(-1) if old_state_values is not None else None
@@ -396,7 +395,7 @@ class PPOAgent(BaseAgent):
                 gae = 0
                 vs = self.value(obss)
                 next_vs = self.value(next_obss)
-                deltas = rews + self.gae_lambda * (1.0 - dones) * next_vs - vs
+                deltas = rews + 0.99 * (1.0 - dws) * next_vs - vs
                 for delta, d in zip(reversed(deltas.flatten().cpu().numpy()), reversed(dones.flatten().cpu().numpy())):
                     gae = delta + 0.99 * self.gae_lambda * gae * (1.0 - d)
                     adv.insert(0, gae)
@@ -414,24 +413,6 @@ class PPOAgent(BaseAgent):
                 # if not self.use_old_policy:
                 dist = self.actor.get_dist(obss[index])
                 log_prob = dist.log_prob(acts[index]).sum(dim=1, keepdim=True)
-                # else:
-                #     # old
-                #     old_dist = self.actor_old.get_dist(x[index].detach())
-                #     old_action = old_dist.rsample()
-                #     old_log_prob = old_dist.log_prob(old_action).sum(dim=-1, keepdim=True)
-                #     # new
-                #     dist = self.actor.get_dist(x[index].detach())
-                #     log_probs = dist.log_prob(old_action).sum(dim=-1, keepdim=True)
-
-                #     with torch.no_grad():
-                #         self.critic: IQLCritic
-                #         advantages = self.critic.get_advantage(x[index], old_action) 
-                    
-
-                    # log_probs = dist.log_prob(acts[index]).sum(dim=1)
-
-                # if self.adv_compute_mode == 'tradition':
-                #     advantages = advantages[index]
 
                 if self.adv_compute_mode in ["tradition", "q-v"]:
                     state_value = self.value(obss[index].detach())
@@ -462,17 +443,6 @@ class PPOAgent(BaseAgent):
                 surrogate = -advantages[index] * ratios
                 surrogate_clipped = -advantages[index] * torch.clamp(ratios,
                                                        1.0 - self.clip_param, 1.0 + self.clip_param)
-                # if batch is not None:
-                #     expert_obs, expert_act, _, _, _ = batch.sample(mini_batch_size=256)
-                #     expert_act, expert_obs = expert_act.to(self.device), expert_obs.to(self.device)
-                #     expert_x = self.encoder(expert_obs)
-                #     expert_x = expert_x.flatten(start_dim=1)
-                #     dist = self.actor.get_dist(expert_x)
-                #     log_prob = dist.log_prob(expert_act)
-                #     bc_loss = -log_prob.sum(dim=-1).mean()
-                #     bc_loss = c.weight_bc_loss * bc_loss
-                # else:
-                #     bc_loss = 0.0
                 
                 policy_loss = torch.max(surrogate, surrogate_clipped).mean() + entropy_loss
 
@@ -484,13 +454,13 @@ class PPOAgent(BaseAgent):
                 nn.utils.clip_grad_norm_(params_list, self.max_grad_norm)
                 self.optimizer.step()
         
-        # if batch is not None:
-        #     bc_loss_dict = self.bc_update(batch)
-        #     bc_loss = bc_loss_dict['bc_loss']
-        #     value_loss = bc_loss_dict['value_loss'] 
-        # else:
-        #     bc_loss = 0.0
-        #     value_loss = 0.0
-
+        if self.ppo_cfg.use_lr_decay and iter is not None and max_iter is not None:
+            self.lr_decay(iter, max_iter)
+            
         return {"policy_loss": policy_loss.item(), "value_loss": value_loss, "entropy_loss": entropy_loss.item(),
                 "surrogate": surrogate.mean().item(), "surrogate_clipped": surrogate_clipped.mean().item()} 
+        
+    def lr_decay(self, step, max_step):
+        lr = self.online_lr * (1 - step / max_step)
+        for p in self.optimizer.param_groups:
+            p['lr'] = lr

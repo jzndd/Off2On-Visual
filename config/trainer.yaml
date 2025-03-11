@@ -22,6 +22,8 @@ ac_type: ppo  # Optional[ppo, bc, iql]
 offline_buffer: /DATA/disk0/jzn/rl_alg_impl_proj/data/${task}/expert_rb_with_reward_state.pkl
 expert_rb_dir: ${offline_buffer}
 
+bc_ckpt_dir: /DATA/disk0/jzn/rl_alg_impl_proj/ckpt/${task}/${ac_type}_state_${agent.ppo_cfg.adv_compute_mode}_seed${common.seed}/bc.pth
+
 wandb:
   mode: online
   project: offline2online-metaworld_${task}
@@ -60,7 +62,8 @@ collection:
 training:
   should: True
   online_max_iter: 3000000 # 3M for VRL3, ppo ; 2e5 for IQL
-  bc_warmup_steps: 10000    # just for PPO
+  bc_actor_warmup_steps: 400000    # 4e5, just for PPO
+  bc_critic_warmup_steps: 2000000   # 2e6, just for PPO
   offline_steps: 50000     # 5w for VRL3, ppo ; 2e5 for IQL
 
 evaluation:
@@ -72,7 +75,7 @@ evaluation:
 actor_critic:
   training:
     sample_weights: null
-    batch_size: 256
+    batch_size: 2048
     grad_acc_steps: 1
     start_after_epochs: 0
     steps_first_epoch: 400
@@ -83,7 +86,7 @@ actor_critic:
   actor_critic_loss:
     _target_: models.rl_agent.ppo_agent.ActorCriticLossConfig
     backup_every: 15
-    gamma: 0.985
+    gamma: 0.99
     lambda_: 0.95
     weight_value_loss: 1.0
     weight_entropy_loss: 0.01

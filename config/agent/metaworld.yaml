@@ -17,12 +17,17 @@ actor_critic_cfg:
   num_actions: ???
   num_states: ???
   depth: 3
+  acitive_fn: 'tanh'
+  online_lr: 3e-6
 
 ppo_cfg:
   _target_: models.rl_agent.baseagent.PPOConfig
   mini_batch_size: 256
   clip_param: 0.2
-  K_epochs: 6
+  K_epochs: 10
   max_grad_norm: 0.5
-  adv_compute_mode: 'q-v' 
-  
+  adv_compute_mode: 'iql' 
+  use_adam_eps: True
+  use_std_share_network: False
+  use_state_norm: True
+  use_lr_decay: True

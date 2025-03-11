@@ -13,13 +13,12 @@ import wandb
 import numpy as np
 from rl_agent.utils import OfflineReplaybuffer, OnlineReplayBuffer
 
-from utils import VideoRecorder, wandb_log
+from utils import VideoRecorder, wandb_log, Normalization
 
 class Trainer:
 
     def __init__(self, cfg, root_dir):
         self._device = torch.device("cuda:0")
-        self._cfg = cfg
         self._device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         print(f"Starting on {self._device}")
 
@@ -58,12 +57,16 @@ class Trainer:
 
         self.metrics = -0.01
 
+        self.bc_ckpt_dir = cfg.bc_ckpt_dir
+        self._cfg = cfg
+
     def run(self):
         cfg = self._cfg
         train_env = self.registered_env_func(num_envs=cfg.collection.train.num_envs, device=self._device, **cfg.env.train)
     
         max_iter = self._cfg.training.online_max_iter
-        bc_warmup_steps = self._cfg.training.bc_warmup_steps
+        bc_actor_warmup_steps = self._cfg.training.bc_actor_warmup_steps
+        bc_critic_warmup_steps = self._cfg.training.bc_critic_warmup_steps
 
         if self._cfg.expert_rb_dir is not None:
             expertrb = OfflineReplaybuffer(110000, (train_env.observation_space.shape[1],), (train_env.action_space.shape[1],))
@@ -75,81 +78,101 @@ class Trainer:
         # assert self._cfg.actor_critic.training.batch_size >= 1024  # PPO's batch_size >= 1024
         rb = OnlineReplayBuffer(self._cfg.actor_critic.training.batch_size, (train_env.observation_space.shape[1],), (train_env.action_space.shape[1],))
 
-        eps_rew = 0
-        done = False
         to_log = []
-        step = 0
+        # First stage
+
+        if self._cfg.agent.ppo_cfg.state_norm:
+            state_norm = Normalization(shape=self._cfg.agent.actor_critic_cfg.num_states, x = expertrb.obs)  # Trick 2:state normalization
+            expertrb.obs = state_norm(expertrb.obs)
+            expertrb.obs_ = state_norm(expertrb.obs_)
+
+        if os.path.exists(self.bc_ckpt_dir):
+            ckpt = torch.load(self.bc_ckpt_dir, self._device, weights_only=True)
+            self.agent.load_state_dict(ckpt["agent"])
+        else:
+            for i in range(bc_actor_warmup_steps):
+                metrics = self.agent.bc_actor_update(expertrb)
+            for i in range(bc_critic_warmup_steps):
+                metrics = self.agent.bc_critic_update(expertrb)
+
+            to_log += self.test_actor_critic(self._cfg.evaluation.eval_times)
+            self.save_agents("bc", to_log[0]["actor_critic/test/avg_reward"])
+
+        self.agent.bc_transfer_ac() 
 
         while self.iter < max_iter:
 
-            self.iter += 1
+            # -----------------------------   2-stage params update   -----------------------------
+            obs, _ = train_env.reset()
+            done = False
+            eps_rew = 0
+            step = 0
 
-            # -----------------------------   2-stage params update   ----------------------------- 
-            # 1 stage : bc warm up
-            if self.iter == 1:
-                for i in range(bc_warmup_steps):
-                    metrics = self.agent.bc_update(expertrb)
-
-                to_log += self.test_actor_critic(self._cfg.evaluation.eval_times)
-                self.save_agents("bc", to_log[0]["actor_critic/test/avg_reward"])
-                self.agent.bc_transfer_ac() 
-
-                obs, _ = train_env.reset()
+            if self._cfg.agent.ppo_cfg.state_norm:
+                obs = state_norm(obs)
 
             # 2 stage : ac update
-            with torch.no_grad():
-                real_act_tuple = self.agent.predict_act(obs) 
-                if isinstance(real_act_tuple, Tuple):
-                    real_act = real_act_tuple[0]
-                    old_log_prob = real_act_tuple[1]
-                    if len(real_act_tuple) == 3:
-                        state_value = real_act_tuple[2]
+            while not done:
+                self.iter += 1
+                with torch.no_grad():
+                    real_act_tuple = self.agent.predict_act(obs) 
+                    if isinstance(real_act_tuple, Tuple):
+                        real_act = real_act_tuple[0]
+                        old_log_prob = real_act_tuple[1]
+                        if len(real_act_tuple) == 3:
+                            state_value = real_act_tuple[2]
+                        else:
+                            state_value = None
                     else:
-                        state_value = None
-                else:
-                    real_act = real_act_tuple
-                    old_log_prob = None
+                        real_act = real_act_tuple
+                        old_log_prob = None
 
-                next_obs, rew, end, trunc, info = train_env.step(real_act)
-                step += 1
-                eps_rew += rew
-                if self.domain_name == 'metaworld':
-                    done = torch.tensor(info['success'], device=self._device, dtype=torch.float32)
-                    done = done or trunc or end
-                else:
-                    done = end or trunc
+                    next_obs, rew, terminated, trunc, info = train_env.step(real_act)
 
-                rb.store(obs, next_obs, rew, done, real_act, old_log_prob, state_value)
+                    if self._cfg.agent.ppo_cfg.state_norm:
+                        next_obs = state_norm(next_obs)
 
-            if done or trunc or end:
-                obs, _ = train_env.reset()
-                print("this traj eps rew is {}, and the traj len is {}".format(eps_rew, step))
-                eps_rew = 0
-                step = 0
+                    step += 1
+                    eps_rew += rew
 
-            obs = next_obs
+                    if self.domain_name == 'metaworld':
+                        done = torch.tensor(info['success'], device=self._device, dtype=torch.float32)
+                        done = done or terminated
+                        dw = torch.tensor(done & (~trunc), dtype=torch.uint8, device=done.device)
+                    else:
+                        done = terminated
+                        # rerference: https://github.com/Lizhi-sjtu/DRL-code-pytorch/blob/8f767b99ad44990b49f6acf3159660c5594db77e/5.PPO-continuous/PPO_continuous_main.py#L100
+                        dw = torch.tensor(done & (~trunc), dtype=torch.uint8, device=done.device) # loss and win but not trunc (because if loss, there is no next state)
 
-            if rb.size >= self._cfg.actor_critic.training.batch_size:
-                print(" ---------------------- begin update  ------------------".format(rb.size))
-                metrics = self.agent.update(rb)
-                # if self.iter <= self._cfg.iter_train_world_model:
-                #     metrics = self.agent.actor_critic.update(rb, expertrb)
-                # else:
-                #     metrics = self.agent.actor_critic.update(rb, None)
+                    rb.store(obs, next_obs, rew, done, real_act, old_log_prob=old_log_prob, 
+                            state_value=state_value, dw=dw)
+                    
+                    obs = next_obs
 
-                _to_log = []
-                _to_log.append(metrics)
-                _to_log = [{f"actor_critic/train/{k}": v for k, v in d.items()} for d in _to_log]
-                to_log += _to_log
-                rb.clear()
+                    # ------------------------------------ should train ? ---------------------------------
+                    
+                    if rb.size >= self._cfg.actor_critic.training.batch_size:
+                        print(" ---------------------- begin update {} ------------------".format(self.iter))
+                        metrics = self.agent.update(rb, self.iter, max_iter)
+                        _to_log = []
+                        _to_log.append(metrics)
+                        _to_log = [{f"actor_critic/train/{k}": v for k, v in d.items()} for d in _to_log]
+                        to_log += _to_log
+                        rb.clear()
 
-            should_test = self._cfg.evaluation.should and (self.iter % self._cfg.evaluation.every_iter == 0)
-            if should_test:
-                print("begin test")
-                to_log += self.test_actor_critic(self._cfg.evaluation.eval_times)
+                    # ------------------------------------ should test ? ---------------------------------
 
-            wandb_log(to_log, self.iter)
-            to_log = []
+                    should_test = self._cfg.evaluation.should and (self.iter % self._cfg.evaluation.every_iter == 0)
+                    if should_test:
+                        print("begin test")
+                        to_log += self.test_actor_critic(self._cfg.evaluation.eval_times)
+
+                    # ------------------------------------ wandb log ---------------------------------
+
+                    wandb_log(to_log, self.iter)
+                    to_log = []
+
+            print("this traj eps rew is {}, and the traj len is {}".format(eps_rew, step))
 
     @torch.no_grad()
     def test_actor_critic(self, eval_times=25):
@@ -179,7 +202,7 @@ class Trainer:
                 # actual_act, act_matrix = decode_metaworld_action(act_matrix, return_index_matrix=True)  # [1, 84] -> [1, 4], [1, 84]
 
                 # next_obs, rew, end, trunc, info = test_env.step(actual_act)
-                next_obs, rew, end, trunc, info = test_env.step(act)
+                next_obs, rew, terminated, trunc, info = test_env.step(act)
                 # video_recorder.record(test_env.render()[0])
                 # import pdb; pdb.set_trace()
                 # video_recorder.save(f"{self.epoch}.mp4")
@@ -193,7 +216,7 @@ class Trainer:
                 obs = next_obs
                 # obs = (obs - self.obs_mean) / (self.obs_std + 1e-8)
 
-                if end or trunc:
+                if terminated or trunc:
                     break
 
             if success:
@@ -214,22 +237,22 @@ class Trainer:
         if metrics > self.metrics:
             self.metrics = metrics
             self.save_agents("best", self.metrics)
-            if hasattr(self.agent, "set_old_policy"):
-                self.agent.set_old_policy()
+            # if hasattr(self.agent, "set_old_policy"):
+            #     self.agent.set_old_policy()
 
         if self.domain_name == 'metaworld':
             to_log = [{"success_rate": success_rate, "avg_reward": avg_reward}]
-            norm_reward = 0.0
+            print(f"Success rate: {success_rate}, Average reward: {avg_reward}")
         else:
             norm_reward = test_env.get_normalized_score(avg_reward)
             to_log = [{"avg_reward": avg_reward, "norm_reward": norm_reward}]
+            print(f"Average reward: {avg_reward}, Normalized reward: {norm_reward}")
         # import pdb; pdb.set_trace()
         # T H W C -> T C H W
         # save_frames = np.array(video_recorder.frames).transpose(0, 3, 1, 2)
         # video_wandb = wandb.Video(save_frames, fps=video_recorder.fps, format="mp4")
         # to_log.append({"video": video_wandb})
 
-        print(f"Success rate: {success_rate}, Average reward: {avg_reward}, Normalized reward: {norm_reward}")
         to_log = [{f"actor_critic/test/{k}": v for k, v in d.items()} for d in to_log]
         print("end test actor_critic")
 
@@ -245,5 +268,5 @@ class Trainer:
 
         # Save the offline agent
         torch.save({
-            "agent": self.agent.actor.state_dict(),
+            "agent": self.agent.state_dict(),
         }, agent_path)

@@ -24,7 +24,8 @@ def main(cfg: DictConfig) -> None:
         cfg.actor_critic.training.steps_per_epoch = 10
         cfg.actor_critic.training.steps_first_epoch = 10
         #
-        cfg.training.bc_warmup_steps = 100
+        cfg.training.bc_actor_warmup_steps = 100
+        cfg.training.bc_critic_warmup_steps = 100
         cfg.training.online_max_iter = 2000
         cfg.evaluation.every_iter = 1000
 
