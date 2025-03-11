@@ -19,6 +19,7 @@ actor_critic_cfg:
   depth: 3
   acitive_fn: 'tanh'
   online_lr: 3e-6
+  frame_stack: 1
 
 ppo_cfg:
   _target_: models.rl_agent.baseagent.PPOConfig

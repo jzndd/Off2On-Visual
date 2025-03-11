@@ -14,10 +14,14 @@ import numpy as np
 from rl_agent.utils import OfflineReplaybuffer, OnlineReplayBuffer
 
 from utils import VideoRecorder, wandb_log, Normalization
+import sys
 
 class Trainer:
 
     def __init__(self, cfg, root_dir):
+
+        sys.path.append(str(root_dir))
+
         self._device = torch.device("cuda:0")
         self._device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         print(f"Starting on {self._device}")
@@ -82,9 +86,9 @@ class Trainer:
         # First stage
 
         if self._cfg.agent.ppo_cfg.use_state_norm:
-            state_norm = Normalization(shape=self._cfg.agent.actor_critic_cfg.num_states, x = expertrb.obs)  # Trick 2:state normalization
-            expertrb.obs = state_norm(expertrb.obs)
-            expertrb.obs_ = state_norm(expertrb.obs_)
+            self.state_norm = Normalization(shape=self._cfg.agent.actor_critic_cfg.num_states, x = expertrb.obs)  # Trick 2:state normalization
+            expertrb.obs = self.state_norm(expertrb.obs)
+            expertrb.obs_ = self.state_norm(expertrb.obs_)
 
         if os.path.exists(self.bc_ckpt_dir):
             ckpt = torch.load(self.bc_ckpt_dir, self._device, weights_only=True)
@@ -92,6 +96,10 @@ class Trainer:
         else:
             for i in range(bc_actor_warmup_steps):
                 metrics = self.agent.bc_actor_update(expertrb)
+                if (i+1) % 10000 == 0:
+                    print(f"bc_actor_warmup_steps: {i}")
+                    self.test_actor_critic(eval_times=10)
+
             for i in range(bc_critic_warmup_steps):
                 metrics = self.agent.bc_critic_update(expertrb)
 
@@ -109,7 +117,7 @@ class Trainer:
             step = 0
 
             if self._cfg.agent.ppo_cfg.use_state_norm:
-                obs = state_norm(obs)
+                obs = self.state_norm(obs)
 
             # 2 stage : ac update
             while not done:
@@ -130,7 +138,7 @@ class Trainer:
                     next_obs, rew, terminated, trunc, info = train_env.step(real_act)
 
                     if self._cfg.agent.ppo_cfg.use_state_norm:
-                        next_obs = state_norm(next_obs)
+                        next_obs = self.state_norm(next_obs)
 
                     step += 1
                     eps_rew += rew
@@ -181,13 +189,13 @@ class Trainer:
         success_rate = 0.0
         # video_recorder = VideoRecorder(self._path_video_dir)
         for i in range(eval_times):
-            test_env.reset()
-            done = False
-            # hx = torch.zeros(test_env.num_envs, model.lstm_dim, device=model.device)
-            # cx = torch.zeros(test_env.num_envs, model.lstm_dim, device=model.device)
 
             seed = random.randint(0, 2**31 - 1)
             obs, _ = test_env.reset(seed=[seed + i for i in range(test_env.num_envs)])
+
+            if self._cfg.agent.ppo_cfg.use_state_norm:
+                obs = self.state_norm(obs)
+
             enabled=True if i==eval_times-1 else False
             # video_recorder.init(test_env.render()[0], enabled=enabled)
             success = False
@@ -203,6 +211,9 @@ class Trainer:
 
                 # next_obs, rew, end, trunc, info = test_env.step(actual_act)
                 next_obs, rew, terminated, trunc, info = test_env.step(act)
+
+                if self._cfg.agent.ppo_cfg.use_state_norm:
+                    next_obs = self.state_norm(next_obs)
                 # video_recorder.record(test_env.render()[0])
                 # import pdb; pdb.set_trace()
                 # video_recorder.save(f"{self.epoch}.mp4")

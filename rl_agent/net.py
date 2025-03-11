@@ -318,11 +318,12 @@ class Actorlog(nn.Module):
 
 # ---------------------------- Encoder ---------------------------- #
 class ActorCriticEncoder(nn.Module):
-    def __init__(self):
+    def __init__(self, cfg: ActorCriticConfig):
         super().__init__()
 
         # self.repr_dim = 32 * 57 * 57
-        self.repr_dim = 32 * 35 * 35
+        # 84 * 84 * 3 input
+        self.repr_dim = cfg.frame_stack * 32 * 35 * 35
 
         self.convnet = nn.Sequential(nn.Conv2d(3, 32, 3, stride=2),
                                      nn.ReLU(), nn.Conv2d(32, 32, 3, stride=1),
