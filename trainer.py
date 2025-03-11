@@ -39,7 +39,7 @@ class Trainer:
         self._save_path = Path("saved_models")
         self._save_path.mkdir(parents=True, exist_ok=True)
 
-        if self._cfg.task in ['button-press-topdown-v2', 'hammer-v2']:
+        if cfg.task in ['button-press-topdown-v2', 'hammer-v2']:
             self.registered_env_func = make_mw_env
             self.domain_name = 'metaworld'
         else:
@@ -81,7 +81,7 @@ class Trainer:
         to_log = []
         # First stage
 
-        if self._cfg.agent.ppo_cfg.state_norm:
+        if self._cfg.agent.ppo_cfg.use_state_norm:
             state_norm = Normalization(shape=self._cfg.agent.actor_critic_cfg.num_states, x = expertrb.obs)  # Trick 2:state normalization
             expertrb.obs = state_norm(expertrb.obs)
             expertrb.obs_ = state_norm(expertrb.obs_)
@@ -108,7 +108,7 @@ class Trainer:
             eps_rew = 0
             step = 0
 
-            if self._cfg.agent.ppo_cfg.state_norm:
+            if self._cfg.agent.ppo_cfg.use_state_norm:
                 obs = state_norm(obs)
 
             # 2 stage : ac update
@@ -129,7 +129,7 @@ class Trainer:
 
                     next_obs, rew, terminated, trunc, info = train_env.step(real_act)
 
-                    if self._cfg.agent.ppo_cfg.state_norm:
+                    if self._cfg.agent.ppo_cfg.use_state_norm:
                         next_obs = state_norm(next_obs)
 
                     step += 1
@@ -149,28 +149,28 @@ class Trainer:
                     
                     obs = next_obs
 
-                    # ------------------------------------ should train ? ---------------------------------
-                    
-                    if rb.size >= self._cfg.actor_critic.training.batch_size:
-                        print(" ---------------------- begin update {} ------------------".format(self.iter))
-                        metrics = self.agent.update(rb, self.iter, max_iter)
-                        _to_log = []
-                        _to_log.append(metrics)
-                        _to_log = [{f"actor_critic/train/{k}": v for k, v in d.items()} for d in _to_log]
-                        to_log += _to_log
-                        rb.clear()
+                # ------------------------------------ should train ? ---------------------------------
+                
+                if rb.size >= self._cfg.actor_critic.training.batch_size:
+                    print(" ---------------------- begin update {} ------------------".format(self.iter))
+                    metrics = self.agent.update(rb, self.iter, max_iter)
+                    _to_log = []
+                    _to_log.append(metrics)
+                    _to_log = [{f"actor_critic/train/{k}": v for k, v in d.items()} for d in _to_log]
+                    to_log += _to_log
+                    rb.clear()
 
-                    # ------------------------------------ should test ? ---------------------------------
+                # ------------------------------------ should test ? ---------------------------------
 
-                    should_test = self._cfg.evaluation.should and (self.iter % self._cfg.evaluation.every_iter == 0)
-                    if should_test:
-                        print("begin test")
-                        to_log += self.test_actor_critic(self._cfg.evaluation.eval_times)
+                should_test = self._cfg.evaluation.should and (self.iter % self._cfg.evaluation.every_iter == 0)
+                if should_test:
+                    print("begin test")
+                    to_log += self.test_actor_critic(self._cfg.evaluation.eval_times)
 
-                    # ------------------------------------ wandb log ---------------------------------
+                # ------------------------------------ wandb log ---------------------------------
 
-                    wandb_log(to_log, self.iter)
-                    to_log = []
+                wandb_log(to_log, self.iter)
+                to_log = []
 
             print("this traj eps rew is {}, and the traj len is {}".format(eps_rew, step))
 

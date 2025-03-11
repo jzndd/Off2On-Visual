@@ -3,6 +3,7 @@ import wandb
 import cv2
 import imageio
 import numpy as np
+import torch
 
 Logs = List[Dict[str, float]]
 
@@ -37,9 +38,18 @@ class Normalization:
 
     def __call__(self, x, update=False):
         # Whether to update the mean and std,during the evaluating,update=False
+        tensor_flag = False
+        if isinstance(x, torch.Tensor):
+            x_device = x.device
+            x = x.cpu().numpy()
+            tensor_flag = True
+
         if update:
             self.running_ms.update(x)
         x = (x - self.running_ms.mean) / (self.running_ms.std + 1e-8)
+
+        if tensor_flag:
+            x = torch.tensor(x, device=x_device)
 
         return x
 

@@ -36,6 +36,8 @@ class PPOConfig:
     adv_compute_mode: str = "tradition" # optional:"tradition", "gae", "q-v" 
     use_adam_eps: bool = True
     use_std_share_network: bool = False
+    use_lr_decay: bool = True
+    use_state_norm: bool = True
 
 class PPOAgent2D(BaseAgent):
     def __init__(
