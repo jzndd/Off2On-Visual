@@ -12,7 +12,7 @@ def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
     return layer
 
 def to_torch(xs, device):
-    return tuple(torch.as_tensor(x, device=device) if x is not None else x for x in xs)
+    return tuple(torch.as_tensor(x.detach(), device=device) if x is not None else x for x in xs)
 
 def compute_returns(rewards, gamma, dones, truncs=None):
     # R = 0
@@ -145,9 +145,8 @@ class OnlineReplayBuffer:
         self.rew = torch.zeros((capacity, 1), dtype=torch.float32)
         self.done = torch.zeros((capacity, 1), dtype=torch.float32)
         self.act = torch.zeros((capacity, *action_shape), dtype=torch.float32)
-        self.old_log_prob = torch.zeros((capacity, 1), dtype=torch.float32)
+        self.old_log_prob = torch.zeros((capacity, *action_shape), dtype=torch.float32)
         self.state_value = torch.zeros((capacity, 1), dtype=torch.float32)
-
         self.dw = torch.zeros((capacity, 1), dtype=torch.float32)
 
     def store(self, obs, next_obs, rew, done, act, old_log_prob=None, state_value=None, dw=None):
@@ -173,17 +172,18 @@ class OnlineReplayBuffer:
             self.rew[self.ptr] = rew[i]
             self.done[self.ptr] = done[i]
             self.act[self.ptr] = act[i]
-            self.ptr = (self.ptr + 1) % self.capacity
             if old_log_prob is not None:
                 self.old_log_prob[self.ptr] = old_log_prob[i]
             if state_value is not None:
                 self.state_value[self.ptr] = state_value[i]
             if dw is not None:
                 self.dw[self.ptr] = dw[i]
-
+            self.ptr = (self.ptr + 1) % self.capacity
+            self.size = min(self.size + 1, self.capacity)
+        # import pdb; pdb.set_trace()
         # Update pointer and size
-        self.ptr = (self.ptr + 1) % self.capacity
-        self.size = min(self.size + 1, self.capacity)
+        # self.ptr = (self.ptr + 1) % self.capacity
+        # self.size = self.ptr
 
     def sample(self, mini_batch_size) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """
@@ -248,7 +248,7 @@ class OnlineReplayBuffer:
     def sample_all(self):
         """
         Returns all the transitions stored in the buffer.
-        return obs, act, rew, done, next_obs
+        return obs, act, rew, next_obs, done, old_log_prob, state_value, dw
         """
         result = (self.obs[:self.size], self.act[:self.size], self.rew[:self.size], self.next_obs[:self.size], self.done[:self.size])
         if self.old_log_prob.sum() != 0:

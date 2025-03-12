@@ -9,7 +9,7 @@ task: hammer-v2
 
 hydra:
   run:
-    dir: outputs/${now:%Y.%m.%d}/${now:%H%M%S}_${wandb.group}
+    dir: outputs/${now:%Y.%m.%d}/${now:%H%M%S}_${task}_${wandb.group}
   job:
     chdir: True  # Don't change the working directory to the output folder
 

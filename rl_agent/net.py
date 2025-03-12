@@ -5,7 +5,13 @@ from copy import deepcopy
 from typing import List, Optional, Tuple, Union
 from rl_agent.baseagent import ActorCriticConfig
 from rl_agent import utils
-from torch import Tensor    
+from torch import Tensor
+from torch.distributions import Beta, Normal   
+
+# Trick 8: orthogonal initialization
+def orthogonal_init(layer, gain=1.0):
+    nn.init.orthogonal_(layer.weight, gain=gain)
+    nn.init.constant_(layer.bias, 0)
 
 # ---------------------------- MLP Network ---------------------------- #
 def MLP(
@@ -14,7 +20,8 @@ def MLP(
     depth: int,
     output_dim: int,
     activation: str = 'relu',
-    final_activation: str = None
+    final_activation: str = None,
+    last_gain: float = 1.0,
 ) -> torch.nn.modules.container.Sequential:
 
     if activation == 'tanh':
@@ -23,11 +30,14 @@ def MLP(
         act_f = nn.ReLU()
 
     layers = [nn.Linear(input_dim, hidden_dim), act_f]
+    orthogonal_init(layers[0])
     for _ in range(depth -1):
         layers.append(nn.Linear(hidden_dim, hidden_dim))
+        orthogonal_init(layers[-1])
         layers.append(act_f)
 
     layers.append(nn.Linear(hidden_dim, output_dim))
+    orthogonal_init(layers[-1], gain=last_gain)
     if final_activation == 'relu':
         layers.append(nn.ReLU())
     elif final_activation == 'tanh':
@@ -85,7 +95,7 @@ class ValueMLP(nn.Module):
             input_dim = cfg.feature_dim
         else:
             input_dim = repr_dim
-        self._net = MLP(input_dim, cfg.hidden_dim, cfg.depth, 1, activation=cfg.acitive_fn, final_activation="tanh")
+        self._net = MLP(input_dim, cfg.hidden_dim, cfg.depth, 1, activation=cfg.acitive_fn, final_activation=None)
 
     def forward(
         self, s: torch.Tensor
@@ -277,9 +287,9 @@ class Actorlog(nn.Module):
 
         self.use_std_share_network = use_std_share_network
         if self.use_std_share_network:
-            self.actor_linear = MLP(input_dim, cfg.hidden_dim, cfg.depth, cfg.num_actions * 2, activation=cfg.acitive_fn, final_activation="tanh")
+            self.actor_linear = MLP(input_dim, cfg.hidden_dim, cfg.depth, cfg.num_actions * 2, activation=cfg.acitive_fn, final_activation=None, last_gain=0.01)
         else:
-            self.actor_linear = MLP(input_dim, cfg.hidden_dim, cfg.depth, cfg.num_actions, activation=cfg.acitive_fn, final_activation="tanh")
+            self.actor_linear = MLP(input_dim, cfg.hidden_dim, cfg.depth, cfg.num_actions, activation=cfg.acitive_fn, final_activation=None, last_gain=0.01)
             self.log_std = nn.Parameter(torch.zeros(1, cfg.num_actions))
 
     def get_action(self, x: Tensor, eval_mode=False) -> Tensor:
@@ -289,15 +299,15 @@ class Actorlog(nn.Module):
             action = action.clamp(-1, 1)
             return action.detach()
         else:
-            dist = utils.TruncatedNormal(mean, std)
+            dist = Normal(mean, std)
             action: Tensor = dist.sample()
-            log_prob = dist.log_prob(action).sum(dim=-1, keepdim=True)  # Summing over action dimensions
-            action = action.clamp(-1, 1)
+            action = torch.clamp(action, -1, 1)
+            log_prob = dist.log_prob(action)  # Summing over action dimensions
             return action, log_prob
         
     def get_dist(self, x: Tensor):
         mean, std = self.forward(x)
-        return utils.TruncatedNormal(mean, std)
+        return Normal(mean, std)
 
     def forward(self, x: Tensor):
         if self.use_trunk:
@@ -312,7 +322,12 @@ class Actorlog(nn.Module):
 
         # log_std_clip
         # log_std = log_std.clamp(-5, 0.)
-        std = log_std.exp()
+
+        # deal with std
+        std = torch.exp(log_std)
+
+        # deal with mean
+        mean = torch.tanh(mean)
         
         return mean, std
 
