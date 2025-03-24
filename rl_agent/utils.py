@@ -43,6 +43,9 @@ def compute_lambda_returns(
     if rew.ndim == 3:
         rew = rew.squeeze(2)
         end = end.squeeze(2)
+    if val_bootstrap.ndim == 1:
+        val_bootstrap = val_bootstrap.unsqueeze(1)
+
     assert rew.ndim == 2 and rew.size() == end.size() == trunc.size() == val_bootstrap.size()
 
     rew = rew.sign()  # clip reward

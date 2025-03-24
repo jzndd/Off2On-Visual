@@ -1,12 +1,12 @@
 train:
   id: ${task}
   max_episode_steps: 100
-  size: [84, 84]
+  size: ${img_size}
   frame_skip: 2
 
 test:
   id: ${task}
-  size: [84, 84]
+  size: ${img_size}
   max_episode_steps: 100
   frame_skip: 2
 

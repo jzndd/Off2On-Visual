@@ -78,12 +78,16 @@ class VideoRecorder:
 
     def record(self, obs):
         if self.enabled:
-            # Convert RGB to BGR for OpenCV compatibility
             if obs.max() <= 1 and obs.min() < 0:
                 obs = obs.squeeze(0).add(1).div(2).mul(255).byte().permute(1, 2, 0).cpu().numpy()
             self.frames.append(obs)
 
     def save(self, file_name):
-        if self.enabled:
+        if self.enabled and self.save_dir is not None:
             path = self.save_dir / file_name
             imageio.mimsave(str(path), self.frames, fps=self.fps)
+        elif self.enabled:
+            imageio.mimsave(file_name, self.frames, fps=self.fps)
+
+def to_np(xs):
+    return tuple(x.squeeze(0).detach().cpu().numpy() for x in xs)

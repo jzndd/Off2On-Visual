@@ -148,7 +148,7 @@ class MetaWorldEnv(gymnasium.Env):
                 self.obs_buffer[0] = self.get_rgb()
 
         if self.cur_step >= self.max_episode_steps:
-            terminated = True
+            truncated = 1.0
 
         obs, original_obs = self._get_obs()
         info["original_obs"] = original_obs
@@ -171,6 +171,7 @@ class MetaWorldEnv(gymnasium.Env):
 
         obs, original_obs = self._get_obs()
         reset_info["original_obs"] = original_obs
+        reset_info["success"] = 0
         self.cur_step = 0
         # print("executing metaworld env reset")
 
@@ -257,18 +258,19 @@ class TorchEnv(gymnasium.Wrapper):
 # test
 if __name__ == "__main__":
 
-    device = torch.device("cuda:0")
-    mw_env = make_mw_env("coffee-push-v2", 1, device, 128)
+    device = torch.device("cuda:1")
+    mw_env = make_mw_env("button-press-topdown-v2", 1, device, 128)
     obs, info = mw_env.reset()
+    # print(info['success'])
     traj = 0
     while(1):
         action = torch.rand((2, 4))
-        obs, rew, end, trunc, info = mw_env.step(action)
+        obs, rew, end, trunc, loop_info = mw_env.step(action)
         traj += 1
         if end.any() or trunc.any():
             print("end")
             break
-
+    print("info", loop_info['success'])
     print("end", end)
     print("trunc", trunc)
     print("traj", traj) 

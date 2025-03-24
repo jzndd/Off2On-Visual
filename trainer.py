@@ -72,7 +72,7 @@ class Trainer:
         bc_critic_warmup_steps = self._cfg.training.bc_critic_warmup_steps
 
         if self._cfg.expert_rb_dir is not None:
-            expertrb = OfflineReplaybuffer(110000, (train_env.observation_space.shape[1],), (train_env.action_space.shape[1],))
+            expertrb = OfflineReplaybuffer(1100000, (train_env.observation_space.shape[1],), (train_env.action_space.shape[1],))
             expertrb.load(self._cfg.expert_rb_dir)
             expertrb.compute_returns()
             # expertrb.state_normalizer()

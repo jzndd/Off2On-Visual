@@ -338,7 +338,10 @@ class ActorCriticEncoder(nn.Module):
 
         # self.repr_dim = 32 * 57 * 57
         # 84 * 84 * 3 input
-        self.repr_dim = cfg.frame_stack * 32 * 35 * 35
+        # self.repr_dim = cfg.frame_stack * 32 * 35 * 35
+
+        # 96 * 96 * 3 input
+        self.repr_dim = cfg.frame_stack * 32 * 41 * 41
 
         self.convnet = nn.Sequential(nn.Conv2d(3, 32, 3, stride=2),
                                      nn.ReLU(), nn.Conv2d(32, 32, 3, stride=1),

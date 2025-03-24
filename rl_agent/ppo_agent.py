@@ -65,17 +65,17 @@ class PPOAgent2D(BaseAgent):
         self.online_lr = cfg.online_lr
 
         self.encoder = ActorCriticEncoder(cfg)
-        self.encoder_optim = optim.Adam(self.encoder.parameters(), lr=1e-4)
+        self.encoder_optim = optim.Adam(self.encoder.parameters(), lr=3e-4)
 
         self.actor = Actorlog(cfg, self.encoder.repr_dim, use_trunk=True, use_std_share_network=ppo_cfg.use_std_share_network)
-        self.actor_optim = optim.Adam(self.actor.parameters(), lr=1e-4)
+        self.actor_optim = optim.Adam(self.actor.parameters(), lr=3e-4)
 
         self.adv_compute_mode = ppo_cfg.adv_compute_mode
 
         if self.adv_compute_mode in ['tradition', 'q-v', 'gae']:
             # use GAE to estimate the advantage
             self.value = ValueMLP(cfg, self.encoder.repr_dim, use_trunk=True)
-            self.value_optim = optim.Adam(self.value.parameters(), lr=1e-4)
+            self.value_optim = optim.Adam(self.value.parameters(), lr=3e-4)
             if self.adv_compute_mode == 'q-v':
                 self.doubleq = DoubleQMLP(cfg, self.encoder.repr_dim, use_trunk=True)
                 self.doubleq_optim = optim.Adam(self.doubleq.parameters(), lr=1e-4)
@@ -92,7 +92,7 @@ class PPOAgent2D(BaseAgent):
         h = self.encoder(obs).flatten(start_dim=1)
         if self.adv_compute_mode == 'tradition' and not eval_mode:
             # When tradition, return both action and state_value
-            return *self.actor.get_action(h, eval_mode=eval_mode), self.value(obs)
+            return *self.actor.get_action(h, eval_mode=eval_mode), self.value(h)
         return self.actor.get_action(h, eval_mode=eval_mode)
 
     def bc_actor_update(self, rb: OfflineReplaybuffer):
@@ -149,22 +149,20 @@ class PPOAgent2D(BaseAgent):
     
     def bc_transfer_ac(self):
 
-        del self.actor_optim
+        if self.ppo_cfg.use_adam_eps:
+            self.actor_optim = optim.Adam(self.actor.parameters(), lr=self.online_lr, eps=1e-5)
+        else:
+            self.actor_optim = optim.Adam(self.actor.parameters(), lr=self.online_lr)
 
-        params_list = list(self.actor.parameters())
         if self.adv_compute_mode in ['tradition', 'q-v', 'gae']:
             del self.value_optim
-            params_list += list(self.value.parameters())
+            params_list = list(self.value.parameters())
             if self.adv_compute_mode == 'q-v':
                 del self.doubleq_optim
                 params_list += list(self.doubleq.parameters())
+            self.critic_optim = optim.Adam(params_list, lr=self.online_lr, eps=1e-5)
         elif self.adv_compute_mode == 'iql':
             self.critic.transbc2online(self.online_lr)
-
-        if self.ppo_cfg.use_adam_eps:
-            self.optimizer = optim.Adam(params_list, lr=self.online_lr, eps=1e-5)
-        else:
-            self.optimizer = optim.Adam(params_list, lr=self.online_lr)
 
         self.fix_encoder = True
         self.encoder.requires_grad_(False)
@@ -183,9 +181,16 @@ class PPOAgent2D(BaseAgent):
         # old_log_probs = old_log_probs.squeeze(-1)
         old_state_values = old_state_values.squeeze(-1) if old_state_values is not None else None
 
-        returns = compute_returns(rews, 0.99, dones)
-        returns = returns.to(self.device)
-        returns = returns.squeeze(-1)
+        truncs = torch.tensor(torch.logical_and(dones, torch.logical_not(dws)), dtype=torch.float32).to(self.device)
+        end = torch.tensor(torch.logical_or(dws, truncs), dtype=torch.float32).to(self.device)
+
+        # returns = compute_returns(rews, 0.99, dones)
+        # returns = returns.to(self.device)
+        # returns = returns.squeeze(-1)
+        if self.adv_compute_mode == 'tradition':
+            returns = compute_lambda_returns(rews, end, truncs, old_state_values, 0.99, self.gae_lambda)
+            returns = returns.to(self.device)
+            returns = returns.squeeze(-1)
 
         with torch.no_grad():
             if self.adv_compute_mode == 'tradition':  
@@ -217,7 +222,7 @@ class PPOAgent2D(BaseAgent):
             for index in BatchSampler(SubsetRandomSampler(range(batch_size)), self.mini_batch_size, False):
                 # if not self.use_old_policy:
                 dist = self.actor.get_dist(obss[index])
-                log_prob = dist.log_prob(acts[index]).sum(dim=1, keepdim=True)
+                log_prob = dist.log_prob(acts[index])
 
                 if self.adv_compute_mode in ["tradition", "q-v"]:
                     state_value = self.value(obss[index].detach())
@@ -233,42 +238,57 @@ class PPOAgent2D(BaseAgent):
                         params_list += list(self.doubleq.parameters())
                 elif self.adv_compute_mode == 'gae':
                     params_list = list(self.value.parameters())
-                    state_value = self.value(obss[index].detach())
-                    value_loss = F.mse_loss(v_target[index], state_value)
+                    state_value = self.value(obss[index])
+                    value_loss = F.mse_loss(state_value, v_target[index])
                     q_loss = torch.tensor(0.0)
                 elif self.adv_compute_mode == "iql":
-                    params_list = []
                     value_loss = torch.tensor(0.0)
                     q_loss = torch.tensor(0.0)
                     self.critic.update(obss[index], acts[index], rews[index], 1-dones[index], next_obss[index])
 
-                ratios = torch.exp(log_prob - old_log_probs[index].sum(1, keepdim=True).detach())
+                ratios = torch.exp(log_prob.sum(1, keepdim=True) - old_log_probs[index].sum(1, keepdim=True).detach())
         
-                entropy_loss = -c.weight_entropy_loss * dist.entropy().mean()
+                entropy_loss = -c.weight_entropy_loss * dist.entropy().sum(1, keepdim=True)
                 surrogate = -advantages[index] * ratios
                 surrogate_clipped = -advantages[index] * torch.clamp(ratios,
                                                        1.0 - self.clip_param, 1.0 + self.clip_param)
                 
-                policy_loss = torch.max(surrogate, surrogate_clipped).mean() + entropy_loss
+                policy_loss = torch.max(surrogate, surrogate_clipped) + entropy_loss
+                policy_loss = policy_loss.mean()
 
-                loss = policy_loss + 0.5 * value_loss + 0.5 * q_loss
-        
-                self.optimizer.zero_grad()
-                loss.backward()
-                params_list += list(self.actor.parameters())
-                nn.utils.clip_grad_norm_(params_list, self.max_grad_norm)
-                self.optimizer.step()
+                self.actor_optim.zero_grad()
+                policy_loss.backward()
+                nn.utils.clip_grad_norm_(self.actor.parameters(), self.max_grad_norm)
+                self.actor_optim.step()
+
+                if self.adv_compute_mode != 'iql':
+                    critic_loss = value_loss + q_loss
+            
+                    self.critic_optim.zero_grad()
+                    critic_loss.backward()
+                    nn.utils.clip_grad_norm_(params_list, self.max_grad_norm)
+                    self.critic_optim.step()
+                else:
+                    self.critic.update(obss[index], acts[index], rews[index], 1-dones[index], next_obss[index])
         
         if self.ppo_cfg.use_lr_decay and iter is not None and max_iter is not None:
             self.lr_decay(iter, max_iter)
-            
-        return {"policy_loss": policy_loss.item(), "value_loss": value_loss, "entropy_loss": entropy_loss.item(),
+
+        return {"policy_loss": policy_loss.item(), "value_loss": value_loss, "entropy_loss": entropy_loss.mean().item(),
                 "surrogate": surrogate.mean().item(), "surrogate_clipped": surrogate_clipped.mean().item()} 
         
     def lr_decay(self, step, max_step):
         lr = self.online_lr * (1 - step / max_step)
-        for p in self.optimizer.param_groups:
-            p['lr'] = lr
+        for p in self.actor_optim.param_groups:
+            p['lr'] = lr 
+        if hasattr(self, 'critic_optim'):
+            for p in self.critic_optim.param_groups:
+                p['lr'] = lr
+        else:
+            for p in self.critic._v_optimizer.param_groups:
+                p['lr'] = lr
+            for p in self.critic._q_optimizer.param_groups:
+                p['lr'] = lr
 
 class PPOAgent(BaseAgent):
     def __init__(
@@ -314,6 +334,7 @@ class PPOAgent(BaseAgent):
 
         self.ac_type = "ppo"
         
+    @torch.no_grad()
     def predict_act(self, obs: torch.Tensor, eval_mode=False) -> ActorCriticOutput:
         assert obs.ndim == 2  # Ensure observation shape is correct
         if self.adv_compute_mode == 'tradition' and not eval_mode:

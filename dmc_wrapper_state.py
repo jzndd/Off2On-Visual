@@ -21,7 +21,8 @@ class D4RLWrapper(gymnasium.Wrapper):
         self._max_episode_steps = max_episode_steps if max_episode_steps is not None else env._max_episode_steps
         self.cur_step = 0
     
-    def reset(self, seed: int | None = None, options: dict[str, Any] | None = None) -> Tuple[np.ndarray, Dict[str, Any]]:
+    # def reset(self, seed: int | None = None, options: dict[str, Any] | None = None) -> Tuple[np.ndarray, Dict[str, Any]]:
+    def reset(self, seed = None, options = None) -> Tuple[np.ndarray, Dict[str, Any]]:
         """Fix: Ensure reset returns (obs, info)"""
         obs = self.env.reset(seed=seed, options=options)
         self.cur_step = 0

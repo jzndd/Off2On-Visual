@@ -46,7 +46,7 @@ env_name = "walker2d-medium-v2"  # Change this to your desired D4RL environment
 file_save_path = f"data/{env_name}"
 import os
 os.makedirs(file_save_path, exist_ok=True)
-buffer = OfflineReplaybuffer(capacity=110000, obs_shape=(17,), action_shape=(6,))  # Update obs_shape and act_dim as needed
+buffer = OfflineReplaybuffer(capacity=1100000, obs_shape=(17,), action_shape=(6,))  # Update obs_shape and act_dim as needed
 store_d4rl_dataset(env_name, buffer, file_save_path=file_save_path)
 
 # env= gym.make("halfcheetah-medium-v2")

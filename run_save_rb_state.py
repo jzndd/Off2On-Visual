@@ -142,7 +142,7 @@ def gen_traj(policy, seed, env_name, ep_num, dataset_name, max_path_length=100, 
 
 if __name__ == "__main__":
 
-    traj_num = 20
+    traj_num = 10
     dataset_name = f"data/"
     seed = list(range(traj_num)) 
     env_seed = 1500

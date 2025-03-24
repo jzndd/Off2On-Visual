@@ -7,9 +7,16 @@ debug_mode: false
 seed: 0
 task: hammer-v2
 
+is_sparse_reward: True
+is_whole_traj: False
+
+save_data: False
+only_bc: False
+img_size: 96
+
 hydra:
   run:
-    dir: outputs/${now:%Y.%m.%d}/${now:%H%M%S}_${wandb.group}
+    dir: outputs/${now:%Y.%m.%d}/${now:%H%M%S}_${task}_${wandb.group}_${wandb.name}
   job:
     chdir: True  # Don't change the working directory to the output folder
 
@@ -19,17 +26,17 @@ common:
   resume: False # do not modify, set by scripts/resume.sh only.
 
 ac_type: ppo  # Optional[ppo, bc, iql]
-offline_buffer: /data/jzn/workspace/ppo_alg/Off2On-Visual/data/${task}/expert_rb_with_reward.pkl
+offline_buffer: /data/jzn/workspace/ppo_alg/Off2On-Visual/data/${task}_${img_size}/expert_rb_with_reward.pkl
 expert_rb_dir: ${offline_buffer}
 
-bc_ckpt_dir: /data/jzn/workspace/ppo_alg/Off2On-Visual/ckpt/${task}/${ac_type}_state_${agent.ppo_cfg.adv_compute_mode}_seed${common.seed}/bc.pth
+bc_ckpt_dir: /data/jzn/workspace/ppo_alg/Off2On-Visual/ckpt/${task}_${ac_type}_2D_${agent.ppo_cfg.adv_compute_mode}_seed${common.seed}/bc.pth
 
 wandb:
   mode: online
   project: offline2online-metaworld_${task}
   entity: jzndd1
   name: seed${seed}_bs${actor_critic.training.batch_size}_minibs${agent.ppo_cfg.mini_batch_size}
-  group: ${ac_type}
+  group: ${ac_type}_${agent.ppo_cfg.adv_compute_mode}
   notes: null
 
 initialization:
@@ -62,8 +69,8 @@ collection:
 training:
   should: True
   online_max_iter: 3000000 # 3M for VRL3, ppo ; 2e5 for IQL
-  bc_actor_warmup_steps: 400000    # 4e5, just for PPO
-  bc_critic_warmup_steps: 2000000   # 2e6, just for PPO
+  bc_actor_warmup_steps: 20000    # 2e4, just for PPO
+  bc_critic_warmup_steps: 20000   # 2e4, just for PPO
   offline_steps: 50000     # 5w for VRL3, ppo ; 2e5 for IQL
 
 evaluation:
@@ -75,7 +82,7 @@ evaluation:
 actor_critic:
   training:
     sample_weights: null
-    batch_size: 256
+    batch_size: 2048
     grad_acc_steps: 1
     start_after_epochs: 0
     steps_first_epoch: 400

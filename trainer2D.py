@@ -2,6 +2,8 @@ import os
 from pathlib import Path
 import random
 from typing import List, Tuple, Union
+
+import cv2
 from mw_wrapper import make_mw_env
 # from dmc_wrapper_state import get_d4rl_env
 import torch
@@ -11,7 +13,7 @@ import wandb
 import numpy as np
 from rl_agent.utils import OfflineReplaybuffer, OnlineReplayBuffer
 
-from utils import VideoRecorder, wandb_log, Normalization
+from utils import VideoRecorder, wandb_log, Normalization, to_np
 import sys
 
 from copy import deepcopy
@@ -42,13 +44,16 @@ class Trainer:
         self._save_path = Path("saved_models")
         self._save_path.mkdir(parents=True, exist_ok=True)
 
-        if cfg.task in ['button-press-topdown-v2', 'hammer-v2']:
-            self.registered_env_func = make_mw_env
-            self.domain_name = 'metaworld'
-        else:
-            raise NotImplementedError("Only metaworld supported for now")
-            self.registered_env_func = get_d4rl_env
-            self.domain_name = 'dmc'
+        # if cfg.task in ['button-press-topdown-v2', 'hammer-v2', 'basketball-v2', "button-press-v2"]:
+        #     self.registered_env_func = make_mw_env
+        #     self.domain_name = 'metaworld'
+        # else:
+        #     raise NotImplementedError("Only metaworld supported for now")
+        #     self.registered_env_func = get_d4rl_env
+        #     self.domain_name = 'dmc'
+
+        self.registered_env_func = make_mw_env
+        self.domain_name = 'metaworld'
 
         env = self.registered_env_func(num_envs=1,  device=self._device, **cfg.env.train)
         cfg.agent.actor_critic_cfg.num_actions = deepcopy(env.num_actions)
@@ -62,6 +67,13 @@ class Trainer:
         self.agent.setup_training(cfg.actor_critic.actor_critic_loss)
 
         self.metrics = -0.01
+
+        if cfg.is_sparse_reward:
+            cfg.bc_ckpt_dir = cfg.bc_ckpt_dir.replace("/bc", "_sparse/bc")
+
+        # print(os.path.exists(cfg.bc_ckpt_dir))
+        # print(cfg.bc_ckpt_dir)
+        # exit(1)
 
         self.bc_ckpt_dir = cfg.bc_ckpt_dir
         self._cfg = cfg
@@ -77,6 +89,12 @@ class Trainer:
         bc_critic_warmup_steps = self._cfg.training.bc_critic_warmup_steps
 
         if self._cfg.expert_rb_dir is not None:
+            if self._cfg.is_sparse_reward:
+                self._cfg.expert_rb_dir = self._cfg.expert_rb_dir.replace("reward", "reward_sparse")
+            if self._cfg.is_whole_traj:
+                self._cfg.expert_rb_dir = self._cfg.expert_rb_dir.replace(".pkl", "_whole_traj.pkl")
+            
+
             expertrb = OfflineReplaybuffer(110000, train_env.observation_space.shape[1:], (train_env.action_space.shape[1],))
             expertrb.load(self._cfg.expert_rb_dir)
             expertrb.compute_returns()
@@ -90,8 +108,10 @@ class Trainer:
 
         # First stage: BC
         if os.path.exists(self.bc_ckpt_dir):
-            ckpt = torch.load(self.bc_ckpt_dir, self._device, weights_only=True)
+            ckpt = torch.load(self.bc_ckpt_dir, self._device)
+            # ckpt = torch.load(self.bc_ckpt_dir, self._device, weights_only=True)
             self.agent.load_state_dict(ckpt["agent"])
+            print("load bc ckpt from {}".format(self.bc_ckpt_dir))
         else:
             for i in range(bc_actor_warmup_steps):
                 metrics = self.agent.bc_actor_update(expertrb)
@@ -105,7 +125,10 @@ class Trainer:
             to_log += self.test_actor_critic(self._cfg.evaluation.eval_times)
             self.save_agents("bc", to_log[0]["actor_critic/test/avg_reward"])
 
-        self.agent.bc_transfer_ac() 
+        self.agent.bc_transfer_ac()
+
+        if self._cfg.only_bc:
+            exit(1) 
 
         while self.iter < max_iter:
 
@@ -116,10 +139,11 @@ class Trainer:
             step = 0
 
             # 2 stage : ac update
+            end_traj_flag = False
             while not done:
                 self.iter += 1
                 with torch.no_grad():
-                    real_act_tuple = self.agent.predict_act(obs) 
+                    real_act_tuple = self.agent.predict_act(obs)
                     if isinstance(real_act_tuple, Tuple):
                         real_act = real_act_tuple[0]
                         old_log_prob = real_act_tuple[1]
@@ -133,17 +157,27 @@ class Trainer:
 
                     next_obs, rew, terminated, trunc, info = train_env.step(real_act)
 
+                    if self._cfg.is_sparse_reward:
+                        rew = torch.tensor(info['success'], device=self._device, dtype=torch.float32)
+
                     step += 1
                     eps_rew += rew
 
                     if self.domain_name == 'metaworld':
                         done = torch.tensor(info['success'], device=self._device, dtype=torch.float32)
-                        done = done or terminated
-                        dw = torch.tensor(done & (~trunc), dtype=torch.uint8, device=done.device)
+                        done = done or terminated or trunc
+                        dw = torch.tensor(done.bool() & (~trunc.bool()), dtype=torch.uint8, device=done.device)
+                        # print("done : {}, dw: {}, trunc:{}".format(done.item(), dw.item(), trunc.item()))
+                        # if self._cfg.is_whole_traj:
+                        #     # here, done means win or loss, trunc means time limit
+                        #     # only when trunc, will end traj
+                        #     end_traj_flag = trunc
+                        # else:
+                        #     end_traj_flag = done
                     else:
                         done = terminated
                         # rerference: https://github.com/Lizhi-sjtu/DRL-code-pytorch/blob/8f767b99ad44990b49f6acf3159660c5594db77e/5.PPO-continuous/PPO_continuous_main.py#L100
-                        dw = torch.tensor(done & (~trunc), dtype=torch.uint8, device=done.device) # loss and win but not trunc (because if loss, there is no next state)
+                        dw = torch.tensor(done.bool() & (~trunc.bool()), dtype=torch.uint8, device=done.device) # loss and win but not trunc (because if loss, there is no next state)
 
                     rb.store(obs, next_obs, rew, done, real_act, old_log_prob=old_log_prob, 
                             state_value=state_value, dw=dw)
@@ -236,7 +270,7 @@ class Trainer:
         video_wandb = wandb.Video(save_frames, fps=video_recorder.fps, format="mp4")
         to_log.append({"video": video_wandb})
 
-        print(f"Success rate: {success_rate}, Average reward: {avg_reward}")
+        print(f"{self._cfg.task} :Success rate: {success_rate}, Average reward: {avg_reward}")
         to_log = [{f"actor_critic/test/{k}": v for k, v in d.items()} for d in to_log]
         print("end test actor_critic")
 
@@ -252,5 +286,319 @@ class Trainer:
 
         # Save the offline agent
         torch.save({
-            "agent": self.agent.actor.state_dict(),
+            "agent": self.agent.state_dict(),
         }, agent_path)
+
+    def save_eval_data(self, save_img=True):
+
+        dataset_name = f"data_/hammer-v2/"
+        # load policy
+        self.bc_ckpt_dir = "/data/jzn/workspace/ppo_alg/Off2On-Visual/ckpt/disassemble-v2_ppo_2D_gae_seed0_sparse/bc.pth"
+        ckpt = torch.load(self.bc_ckpt_dir, self._device)
+        self.agent.load_state_dict(ckpt["agent"])
+
+        train_env = self.registered_env_func(num_envs=1, device=self._device, **self._cfg.env.train)
+
+        success_trajs = 10 ; success_traj = 0
+        random_trajs = 10 ; random_traj = 0
+
+        eps_imgs = []
+        eps_actions = []
+        eps_rewards = []
+        eps_terminateds = []
+        eps_truncateds = []
+        eps_save_imgs = []
+
+        success_data = []
+        random_data = []
+
+        video_record = VideoRecorder()
+
+        seed = random.randint(0, 2**31 - 1)
+        obs, _ = train_env.reset(seed=[seed + i for i in range(train_env.num_envs)])
+        done = False
+        eps_rew = 0
+        step = 0
+
+        success_flag = False
+
+        while success_traj < success_trajs or random_traj < random_trajs:
+
+            # if save_img:
+                # 1 * 3 * 96 * 96 -> 96 * 96 * 3
+            cam_img = obs.squeeze(0).add(1).div(2).mul(255).byte().permute(1, 2, 0)
+            eps_save_imgs.append(cam_img.cpu().numpy())
+            eps_imgs.append(cam_img)
+
+            with torch.no_grad():
+                real_act_tuple = self.agent.predict_act(obs) 
+                if isinstance(real_act_tuple, Tuple):
+                    real_act = real_act_tuple[0]
+                    old_log_prob = real_act_tuple[1]
+                    if len(real_act_tuple) == 3:
+                        state_value = real_act_tuple[2]
+                    else:
+                        state_value = None
+                else:
+                    real_act = real_act_tuple
+                    old_log_prob = None
+
+                next_obs, rew, terminated, trunc, info = train_env.step(real_act)
+
+            if self._cfg.is_sparse_reward:
+                rew = torch.tensor(info['success'], device=self._device, dtype=torch.float32)
+
+            eps_actions.append(real_act)
+            eps_rewards.append(rew)
+
+            step += 1
+            eps_rew += rew
+
+            if self.domain_name == 'metaworld':
+                # done = torch.tensor(info['success'], device=self._device, dtype=torch.float32)
+                done = terminated or trunc
+                success_flag |= bool(info['success'])
+                eps_terminateds.append(terminated)
+                eps_truncateds.append(trunc)
+            else:
+                raise NotImplementedError("Only metaworld supported for now")\
+                
+            obs = next_obs
+            
+            ######## save data
+            
+            if trunc:
+                if success_flag and success_traj < success_trajs:
+                    assert len(eps_imgs) == len(eps_actions) == len(eps_rewards) == len(eps_terminateds) == len(eps_truncateds) == 50
+                    for i, (img, action, reward, terminated, truncated, img_to_save) in enumerate(zip(
+                        eps_imgs, eps_actions, eps_rewards, eps_terminateds, eps_truncateds, eps_save_imgs
+                        )):
+                            img, action, reward, terminated, truncated = to_np((img, action, reward, terminated, truncated))
+                            success_data.append({
+                            'image': img,
+                            'action': action,
+                            'reward': reward,
+                            'terminated': terminated,
+                            'truncated': truncated,
+                        })
+                            if i == 0:
+                                video_record.init(img_to_save)
+                            else:
+                                video_record.record(img_to_save)
+
+                            path = f"{str(dataset_name)}/test_real_image/{int(success_traj)}/{int(i)}.png"
+                        
+                            os.makedirs(os.path.dirname(path), exist_ok=True)
+                            cv2.imwrite(path, cv2.cvtColor(img_to_save, cv2.COLOR_RGB2BGR))
+
+                    success_traj += 1
+
+                    video_path = f"{str(dataset_name)}/test_video/{success_traj-1}.mp4"
+                    os.makedirs(os.path.dirname(f"{str(dataset_name)}/test_video/"), exist_ok=True)
+                    video_record.save(video_path)
+
+                    print("get success traj, the rew is {}".format(eps_rew))
+
+                    data_dir = f"{str(dataset_name)}/test_raw_data"
+                    os.makedirs(data_dir, exist_ok=True)
+                    data_path = f"{data_dir}/{success_traj-1}.npy"
+                    np.save(data_path, success_data)
+                
+                elif not success_flag and random_traj < random_trajs:
+                    assert len(eps_imgs) == len(eps_actions) == len(eps_rewards) == len(eps_terminateds) == len(eps_truncateds) == 50
+                    for i, (img, action, reward, terminated, truncated, img_to_save) in enumerate(zip(
+                        eps_imgs, eps_actions, eps_rewards, eps_terminateds, eps_truncateds, eps_save_imgs
+                        )):
+                            img, action, reward, terminated, truncated = to_np((img, action, reward, terminated, truncated))
+                            random_data.append({
+                            'image': img,
+                            'action': action,
+                            'reward': reward,
+                            'terminated': terminated,
+                            'truncated': truncated,
+                        })
+                            if i == 0:
+                                video_record.init(img_to_save)
+                            else:
+                                video_record.record(img_to_save)
+
+                            path = f"{str(dataset_name)}/test_real_image/random_{int(random_traj)}/{int(i)}.png"
+                        
+                            os.makedirs(os.path.dirname(path), exist_ok=True)
+                            cv2.imwrite(path, cv2.cvtColor(img_to_save, cv2.COLOR_RGB2BGR))
+
+                    random_traj += 1
+
+                    video_path = f"{str(dataset_name)}/test_video/random_{random_traj-1}.mp4"
+                    os.makedirs(os.path.dirname(f"{str(dataset_name)}/test_video/"), exist_ok=True)
+                    video_record.save(video_path)
+
+                    print("get random traj, the rew is {}".format(eps_rew))
+
+                    data_dir = f"{str(dataset_name)}/test_raw_data"
+                    os.makedirs(data_dir, exist_ok=True)
+                    data_path = f"{data_dir}/random_{random_traj-1}.npy"
+                    np.save(data_path, random_data)
+
+                else:
+                    print("success traj is {} and random traj is {}".format(success_traj, random_traj))
+                    print("get traj, the rew is {}".format(eps_rew))
+
+                eps_imgs = []
+                eps_actions = []
+                eps_rewards = []
+                eps_terminateds = []
+                eps_truncateds = []
+                eps_save_imgs = []
+                seed = random.randint(0, 2**31 - 1)
+                obs, _ = train_env.reset(seed=[seed + i for i in range(train_env.num_envs)])
+                done = False
+                success_flag = False
+                eps_rew = 0
+                step = 0
+                random_data = []
+                success_data = []
+
+
+    def save_data(self,):
+
+        dataset_name = f"data_/metaworld_{self._cfg.img_size}/"
+        # load policy
+        self.bc_ckpt_dir = "/data/jzn/workspace/ppo_alg/Off2On-Visual/ckpt/disassemble-v2_ppo_2D_gae_seed0_sparse/bc.pth"
+        ckpt = torch.load(self.bc_ckpt_dir, self._device)
+        self.agent.load_state_dict(ckpt["agent"])
+
+        train_env = self.registered_env_func(num_envs=1, device=self._device, **self._cfg.env.train)
+
+        success_trajs = 75 ; success_traj = 0
+        random_trajs = 75 ; random_traj = 0
+
+        eps_imgs = []
+        eps_actions = []
+        eps_rewards = []
+        eps_terminateds = []
+        eps_truncateds = []
+        success_data = []
+        random_data = []
+
+        seed = random.randint(0, 2**31 - 1)
+        obs, _ = train_env.reset(seed=[seed + i for i in range(train_env.num_envs)])
+        done = False
+        eps_rew = 0
+        step = 0
+
+        success_flag = False
+
+        # total_traj = 150
+        # cur_traj = 0
+
+        while success_traj < success_trajs or random_traj < random_trajs:
+        # while cur_traj < total_traj:
+
+            cam_img = obs.squeeze(0).add(1).div(2).mul(255).byte().permute(1, 2, 0)
+            eps_imgs.append(cam_img)
+
+            with torch.no_grad():
+                real_act_tuple = self.agent.predict_act(obs) 
+                if isinstance(real_act_tuple, Tuple):
+                    real_act = real_act_tuple[0]
+                    old_log_prob = real_act_tuple[1]
+                    if len(real_act_tuple) == 3:
+                        state_value = real_act_tuple[2]
+                    else:
+                        state_value = None
+                else:
+                    real_act = real_act_tuple
+                    old_log_prob = None
+
+                next_obs, rew, terminated, trunc, info = train_env.step(real_act)
+
+            if self._cfg.is_sparse_reward:
+                rew = torch.tensor(info['success'], device=self._device, dtype=torch.float32)
+
+            eps_actions.append(real_act)
+            eps_rewards.append(rew)
+
+            step += 1
+            eps_rew += rew
+
+            if self.domain_name == 'metaworld':
+                # done = torch.tensor(info['success'], device=self._device, dtype=torch.float32)
+                done = terminated or trunc
+                success_flag |= bool(info['success'])
+                eps_terminateds.append(terminated)
+                eps_truncateds.append(trunc)
+            else:
+                raise NotImplementedError("Only metaworld supported for now")\
+                
+            obs = next_obs
+            
+            ######## save data
+            
+            if trunc:
+                if success_flag and success_traj < success_trajs:
+                # if success_flag:
+                    assert len(eps_imgs) == len(eps_actions) == len(eps_rewards) == len(eps_terminateds) == len(eps_truncateds) == 50
+                    for i, (img, action, reward, terminated, truncated) in enumerate(zip(
+                        eps_imgs, eps_actions, eps_rewards, eps_terminateds, eps_truncateds,
+                        )):
+                            img, action, reward, terminated, truncated = to_np((img, action, reward, terminated, truncated))
+                            success_data.append({
+                            'image': img,
+                            'action': action,
+                            'reward': reward,
+                            'terminated': terminated,
+                            'truncated': truncated,
+                        })
+
+                    success_traj += 1
+
+                    print("get success traj, the rew is {}".format(eps_rew))
+
+                    data_dir = f"{str(dataset_name)}/raw_data"
+                    os.makedirs(data_dir, exist_ok=True)
+                    data_path = f"{data_dir}/{success_traj-1}.npy"
+                    np.save(data_path, success_data)
+                
+                elif not success_flag and random_traj < random_trajs:
+                # elif not success_flag:
+                    assert len(eps_imgs) == len(eps_actions) == len(eps_rewards) == len(eps_terminateds) == len(eps_truncateds) == 50
+                    for i, (img, action, reward, terminated, truncated, ) in enumerate(zip(
+                        eps_imgs, eps_actions, eps_rewards, eps_terminateds, eps_truncateds, 
+                        )):
+                            img, action, reward, terminated, truncated = to_np((img, action, reward, terminated, truncated))
+                            random_data.append({
+                            'image': img,
+                            'action': action,
+                            'reward': reward,
+                            'terminated': terminated,
+                            'truncated': truncated,
+                        })
+                            
+                    random_traj += 1
+
+                    print("get random traj, the rew is {}".format(eps_rew))
+
+                    data_dir = f"{str(dataset_name)}/raw_data"
+                    os.makedirs(data_dir, exist_ok=True)
+                    data_path = f"{data_dir}/random_{random_traj-1}.npy"
+                    np.save(data_path, random_data)
+
+                else:
+                    print("success traj is {} and random traj is {}".format(success_traj, random_traj))
+                    print("get traj, the rew is {}".format(eps_rew))
+
+                eps_imgs = []
+                eps_actions = []
+                eps_rewards = []
+                eps_terminateds = []
+                eps_truncateds = []
+                # cur_traj += 1
+                seed = random.randint(0, 2**31 - 1)
+                obs, _ = train_env.reset(seed=[seed + i for i in range(train_env.num_envs)])
+                success_flag = False
+                eps_rew = 0
+                step = 0
+                random_data = []
+                success_data = []
+        

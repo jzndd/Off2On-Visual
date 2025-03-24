@@ -18,7 +18,7 @@ def main(cfg: DictConfig) -> None:
     setup_visible_cuda_devices(cfg.common.devices)
     root_dir = Path(hydra.utils.get_original_cwd())
 
-    if cfg.debug_mode:
+    if cfg.debug_mode or cfg.only_bc:
         cfg.wandb.mode = "disabled"         # If debug mode, disable use of wandb
         cfg.collection.train.first_epoch.min = 1500
         # For ActionModel
@@ -26,12 +26,18 @@ def main(cfg: DictConfig) -> None:
         cfg.actor_critic.training.steps_per_epoch = 10
         cfg.actor_critic.training.steps_first_epoch = 10
         #
-        cfg.training.bc_actor_warmup_steps = 100
-        cfg.training.bc_critic_warmup_steps = 100
-        cfg.training.online_max_iter = 2000
-        cfg.evaluation.every_iter = 1000
-
-    run(cfg, root_dir)
+        cfg.training.bc_actor_warmup_steps = 50
+        cfg.training.bc_critic_warmup_steps = 10
+        # cfg.training.online_max_iter = 2000
+        # cfg.evaluation.every_iter = 1000
+        # cfg.evaluation.eval_times = 1
+    
+    if not cfg.save_data:
+        run(cfg, root_dir)
+    else:
+        trainer = Trainer(cfg, root_dir)
+        # trainer.save_data()
+        trainer.save_eval_data()
 
 def setup_visible_cuda_devices(devices: Union[str, int, List[int]]) -> None:
     if isinstance(devices, str):

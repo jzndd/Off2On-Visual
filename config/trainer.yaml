@@ -19,10 +19,10 @@ common:
   resume: False # do not modify, set by scripts/resume.sh only.
 
 ac_type: ppo  # Optional[ppo, bc, iql]
-offline_buffer: /DATA/disk0/jzn/rl_alg_impl_proj/data/${task}/expert_rb_with_reward_state.pkl
+offline_buffer: /data/jzn/workspace/ppo_alg/Off2On-Visual/data/${task}/expert_rb_with_reward_state.pkl
 expert_rb_dir: ${offline_buffer}
 
-bc_ckpt_dir: /DATA/disk0/jzn/rl_alg_impl_proj/ckpt/${task}/${ac_type}_state_${agent.ppo_cfg.adv_compute_mode}_seed${common.seed}/bc.pth
+bc_ckpt_dir: /data/jzn/workspace/ppo_alg/Off2On-Visual/ckpt/${task}/${ac_type}_state_${agent.ppo_cfg.adv_compute_mode}_seed${common.seed}/bc.pth
 
 wandb:
   mode: online

@@ -23,11 +23,11 @@ actor_critic_cfg:
 
 ppo_cfg:
   _target_: models.rl_agent.baseagent.PPOConfig
-  mini_batch_size: 256
+  mini_batch_size: 64
   clip_param: 0.2
   K_epochs: 10
   max_grad_norm: 0.5
-  adv_compute_mode: 'iql' 
+  adv_compute_mode: 'gae' 
   use_adam_eps: True
   use_std_share_network: False
   use_state_norm: True
