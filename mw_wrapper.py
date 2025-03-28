@@ -126,9 +126,11 @@ class MetaWorldEnv(gymnasium.Env):
         for t in range(self.frame_skip):
             self.cur_step += 1            
             state, reward, terminated, truncated, info = self.env.step(action)
-            if self.is_sparse_reward:
-                reward = 1.0 if info["success"] else 0.0
+            # if self.is_sparse_reward:
+            #     reward = 1.0 if info["success"] else 0.0
             total_reward += reward
+            if self.is_sparse_reward:
+                total_reward = 1.0 if info["success"] else 0.0
             self.game_over = terminated
             # if self.ale.lives() < self.lives:
             #     life_loss = True

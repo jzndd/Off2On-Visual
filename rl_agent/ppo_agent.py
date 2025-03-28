@@ -149,23 +149,28 @@ class PPOAgent2D(BaseAgent):
     
     def bc_transfer_ac(self):
 
-        if self.ppo_cfg.use_adam_eps:
-            self.actor_optim = optim.Adam(self.actor.parameters(), lr=self.online_lr, eps=1e-5)
-        else:
-            self.actor_optim = optim.Adam(self.actor.parameters(), lr=self.online_lr)
+        # if self.ppo_cfg.use_adam_eps:
+        #     self.actor_optim = optim.Adam(self.actor.parameters(), lr=self.online_lr, eps=1e-5)
+        # else:
+        #     self.actor_optim = optim.Adam(self.actor.parameters(), lr=self.online_lr)
 
-        if self.adv_compute_mode in ['tradition', 'q-v', 'gae']:
-            del self.value_optim
-            params_list = list(self.value.parameters())
-            if self.adv_compute_mode == 'q-v':
-                del self.doubleq_optim
-                params_list += list(self.doubleq.parameters())
-            self.critic_optim = optim.Adam(params_list, lr=self.online_lr, eps=1e-5)
-        elif self.adv_compute_mode == 'iql':
-            self.critic.transbc2online(self.online_lr)
+        # if self.adv_compute_mode in ['tradition', 'q-v', 'gae']:
+        #     del self.value_optim
+        #     params_list = list(self.value.parameters())
+        #     if self.adv_compute_mode == 'q-v':
+        #         del self.doubleq_optim
+        #         params_list += list(self.doubleq.parameters())
+        #     self.critic_optim = optim.Adam(params_list, lr=self.online_lr, eps=1e-5)
+        # elif self.adv_compute_mode == 'iql':
+        #     self.critic.transbc2online(self.online_lr)
+        del self.actor_optim
+        del self.value_optim
+
+        params_list = list(self.actor.parameters()) + list(self.value.parameters()) + list(self.encoder.parameters())
+        self.optim = optim.Adam(params_list, lr=self.online_lr)
 
         self.fix_encoder = True
-        self.encoder.requires_grad_(False)
+        # self.encoder.requires_grad_(False)
     
     def update(self, rb: OnlineReplayBuffer, iter=None, max_iter=None):
 
@@ -174,7 +179,11 @@ class PPOAgent2D(BaseAgent):
         batch = rb.sample_all()
         obss, acts, rews, next_obss, dones, old_log_probs, old_state_values, dws = to_torch(batch, self.device)
 
-        with torch.no_grad():
+        if self.fix_encoder:
+            with torch.no_grad():
+                obss = self.encoder(obss).flatten(start_dim=1)
+                next_obss = self.encoder(next_obss).flatten(start_dim=1)
+        else:
             obss = self.encoder(obss).flatten(start_dim=1)
             next_obss = self.encoder(next_obss).flatten(start_dim=1)
 
@@ -228,16 +237,13 @@ class PPOAgent2D(BaseAgent):
                     state_value = self.value(obss[index].detach())
                     value_loss = F.mse_loss(state_value.squeeze(), returns[index])
                     q_loss = torch.tensor(0.0)
-                    params_list = list(self.value.parameters())
                     if self.adv_compute_mode == 'q-v':
                         with torch.no_grad():
                             next_act = self.actor.get_action(next_obss[index], eval_mode=True)
                             target_q = rews[index] + (1-dones[index]) * 0.99 * torch.min(*self.doubleq(next_obss[index], next_act))
                         q1, q2 = self.doubleq(obss[index], acts[index])
                         q_loss = 0.5 * F.mse_loss(q1, target_q) + 0.5 * F.mse_loss(q2, target_q)
-                        params_list += list(self.doubleq.parameters())
                 elif self.adv_compute_mode == 'gae':
-                    params_list = list(self.value.parameters())
                     state_value = self.value(obss[index])
                     value_loss = F.mse_loss(state_value, v_target[index])
                     q_loss = torch.tensor(0.0)
@@ -256,39 +262,38 @@ class PPOAgent2D(BaseAgent):
                 policy_loss = torch.max(surrogate, surrogate_clipped) + entropy_loss
                 policy_loss = policy_loss.mean()
 
-                self.actor_optim.zero_grad()
-                policy_loss.backward()
-                nn.utils.clip_grad_norm_(self.actor.parameters(), self.max_grad_norm)
-                self.actor_optim.step()
-
                 if self.adv_compute_mode != 'iql':
                     critic_loss = value_loss + q_loss
-            
-                    self.critic_optim.zero_grad()
-                    critic_loss.backward()
-                    nn.utils.clip_grad_norm_(params_list, self.max_grad_norm)
-                    self.critic_optim.step()
                 else:
                     self.critic.update(obss[index], acts[index], rews[index], 1-dones[index], next_obss[index])
         
-        if self.ppo_cfg.use_lr_decay and iter is not None and max_iter is not None:
-            self.lr_decay(iter, max_iter)
+        loss = policy_loss + critic_loss
+
+        self.optim.zero_grad()
+        loss.backward()
+        nn.utils.clip_grad_norm_(self.actor.parameters(), self.max_grad_norm)
+        nn.utils.clip_grad_norm_(self.value.parameters(), self.max_grad_norm)
+        nn.utils.clip_grad_norm_(self.encoder.parameters(), self.max_grad_norm)
+        self.optim.step()
+
+        # if self.ppo_cfg.use_lr_decay and iter is not None and max_iter is not None:
+        #     self.lr_decay(iter, max_iter)
 
         return {"policy_loss": policy_loss.item(), "value_loss": value_loss, "entropy_loss": entropy_loss.mean().item(),
                 "surrogate": surrogate.mean().item(), "surrogate_clipped": surrogate_clipped.mean().item()} 
         
-    def lr_decay(self, step, max_step):
-        lr = self.online_lr * (1 - step / max_step)
-        for p in self.actor_optim.param_groups:
-            p['lr'] = lr 
-        if hasattr(self, 'critic_optim'):
-            for p in self.critic_optim.param_groups:
-                p['lr'] = lr
-        else:
-            for p in self.critic._v_optimizer.param_groups:
-                p['lr'] = lr
-            for p in self.critic._q_optimizer.param_groups:
-                p['lr'] = lr
+    # def lr_decay(self, step, max_step):
+    #     lr = self.online_lr * (1 - step / max_step)
+    #     for p in self.actor_optim.param_groups:
+    #         p['lr'] = lr 
+    #     if hasattr(self, 'critic_optim'):
+    #         for p in self.critic_optim.param_groups:
+    #             p['lr'] = lr
+    #     else:
+    #         for p in self.critic._v_optimizer.param_groups:
+    #             p['lr'] = lr
+    #         for p in self.critic._q_optimizer.param_groups:
+    #             p['lr'] = lr
 
 class PPOAgent(BaseAgent):
     def __init__(
