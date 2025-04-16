@@ -32,3 +32,4 @@ ppo_cfg:
   use_std_share_network: False
   use_state_norm: True
   use_lr_decay: True
+  use_bc: True

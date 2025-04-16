@@ -26,17 +26,20 @@ def main(cfg: DictConfig) -> None:
         cfg.actor_critic.training.steps_per_epoch = 10
         cfg.actor_critic.training.steps_first_epoch = 10
         #
-        cfg.training.bc_actor_warmup_steps = 50
+        cfg.training.bc_actor_warmup_steps = 10
         cfg.training.bc_critic_warmup_steps = 10
         # cfg.training.online_max_iter = 2000
         # cfg.evaluation.every_iter = 1000
         # cfg.evaluation.eval_times = 1
     
     if not cfg.save_data:
+        if not cfg.is_sparse_reward:
+            cfg.wandb.group += "_wosparse"
         run(cfg, root_dir)
     else:
+        cfg.wandb.mode = "disabled"
         trainer = Trainer(cfg, root_dir)
-        # trainer.save_data()
+        trainer.save_data()
         trainer.save_eval_data()
 
 def setup_visible_cuda_devices(devices: Union[str, int, List[int]]) -> None:

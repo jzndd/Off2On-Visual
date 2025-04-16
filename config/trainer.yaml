@@ -7,6 +7,8 @@ debug_mode: false
 seed: 0
 task: hammer-v2
 
+img_size: 96
+
 hydra:
   run:
     dir: outputs/${now:%Y.%m.%d}/${now:%H%M%S}_${task}_${wandb.group}

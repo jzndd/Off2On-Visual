@@ -38,6 +38,7 @@ class PPOConfig:
     use_std_share_network: bool = False
     use_lr_decay: bool = True
     use_state_norm: bool = True
+    use_bc: bool = False
 
 class PPOAgent2D(BaseAgent):
     def __init__(
@@ -60,6 +61,8 @@ class PPOAgent2D(BaseAgent):
         self.gae_lambda = 0.95
 
         self.ppo_cfg = ppo_cfg
+
+        self.use_bc = ppo_cfg.use_bc
         ## network initialization
 
         self.online_lr = cfg.online_lr
@@ -70,6 +73,10 @@ class PPOAgent2D(BaseAgent):
         self.actor = Actorlog(cfg, self.encoder.repr_dim, use_trunk=True, use_std_share_network=ppo_cfg.use_std_share_network)
         self.actor_optim = optim.Adam(self.actor.parameters(), lr=3e-4)
 
+        # set old actor
+        self.old_actor = deepcopy(self.actor)
+        self.old_actor.requires_grad_(False)
+
         self.adv_compute_mode = ppo_cfg.adv_compute_mode
 
         if self.adv_compute_mode in ['tradition', 'q-v', 'gae']:
@@ -79,12 +86,13 @@ class PPOAgent2D(BaseAgent):
             if self.adv_compute_mode == 'q-v':
                 self.doubleq = DoubleQMLP(cfg, self.encoder.repr_dim, use_trunk=True)
                 self.doubleq_optim = optim.Adam(self.doubleq.parameters(), lr=1e-4)
-        elif self.adv_compute_mode == 'iql':
+        elif self.adv_compute_mode in ['iql', 'iql2gae']:
             self.critic = IQLCritic(cfg, self.encoder.repr_dim, use_trunk=True) 
         else:
             raise NotImplementedError
 
         self.ac_type = "ppo"
+        self.fix_encoder = False
     
     @torch.no_grad()
     def predict_act(self, obs: torch.Tensor, eval_mode=False) -> ActorCriticOutput:
@@ -107,7 +115,7 @@ class PPOAgent2D(BaseAgent):
         dist = self.actor.get_dist(h)
         log_prob = dist.log_prob(act)
         bc_loss = -log_prob.sum(dim=-1).mean() 
-        bc_loss = c.weight_bc_loss * bc_loss
+        # bc_loss = c.weight_bc_loss * bc_loss
 
         self.actor_optim.zero_grad()
         self.encoder_optim.zero_grad()
@@ -164,12 +172,25 @@ class PPOAgent2D(BaseAgent):
         # elif self.adv_compute_mode == 'iql':
         #     self.critic.transbc2online(self.online_lr)
         del self.actor_optim
-        del self.value_optim
+        
+        if hasattr(self, 'value_optim'):
+            del self.value_optim
 
-        params_list = list(self.actor.parameters()) + list(self.value.parameters()) + list(self.encoder.parameters())
-        self.optim = optim.Adam(params_list, lr=self.online_lr)
+        if self.adv_compute_mode in ['iql2gae']:
+            self.value = deepcopy(self.critic._value)
+            del self.critic
+
+        # params_list = list(self.actor.parameters()) + list(self.value.parameters()) + list(self.encoder.parameters())
+        # self.optim = optim.Adam(params_list, lr=self.online_lr)
+        self.optim = optim.Adam([
+            {'params': self.actor.parameters(), 'lr': self.online_lr},
+            {'params': self.value.parameters(), 'lr': 1e-4},
+            {'params': self.encoder.parameters(), 'lr': self.online_lr},
+        ])
 
         self.fix_encoder = True
+
+        self.set_old_policy()
         # self.encoder.requires_grad_(False)
     
     def update(self, rb: OnlineReplayBuffer, iter=None, max_iter=None):
@@ -186,6 +207,9 @@ class PPOAgent2D(BaseAgent):
         else:
             obss = self.encoder(obss).flatten(start_dim=1)
             next_obss = self.encoder(next_obss).flatten(start_dim=1)
+
+        if self.use_bc:
+            bc_act = self.actor.get_action(obss, eval_mode=True)
 
         # old_log_probs = old_log_probs.squeeze(-1)
         old_state_values = old_state_values.squeeze(-1) if old_state_values is not None else None
@@ -209,7 +233,7 @@ class PPOAgent2D(BaseAgent):
             elif self.adv_compute_mode == 'q-v':
                 advantages = torch.min(*self.doubleq(obss, acts)) - self.value(obss)
                 advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-10)
-            elif self.adv_compute_mode == 'gae':
+            elif self.adv_compute_mode in ['gae','iql2gae']:
                 adv = []
                 gae = 0
                 vs = self.value(obss)
@@ -243,7 +267,7 @@ class PPOAgent2D(BaseAgent):
                             target_q = rews[index] + (1-dones[index]) * 0.99 * torch.min(*self.doubleq(next_obss[index], next_act))
                         q1, q2 = self.doubleq(obss[index], acts[index])
                         q_loss = 0.5 * F.mse_loss(q1, target_q) + 0.5 * F.mse_loss(q2, target_q)
-                elif self.adv_compute_mode == 'gae':
+                elif self.adv_compute_mode in ['gae','iql2gae']:
                     state_value = self.value(obss[index])
                     value_loss = F.mse_loss(state_value, v_target[index])
                     q_loss = torch.tensor(0.0)
@@ -259,7 +283,13 @@ class PPOAgent2D(BaseAgent):
                 surrogate_clipped = -advantages[index] * torch.clamp(ratios,
                                                        1.0 - self.clip_param, 1.0 + self.clip_param)
                 
-                policy_loss = torch.max(surrogate, surrogate_clipped) + entropy_loss
+                if self.use_bc:
+                    bc_loss = - c.weight_bc_loss * dist.log_prob(bc_act[index]).sum(dim=-1, keepdim=True)
+                else:
+                    bc_loss = torch.tensor(0.0)
+                    # bc_act = self.bc.get_action(obss[index], eval_mode=True)
+                
+                policy_loss = torch.max(surrogate, surrogate_clipped) + entropy_loss + bc_loss
                 policy_loss = policy_loss.mean()
 
                 if self.adv_compute_mode != 'iql':
@@ -280,7 +310,15 @@ class PPOAgent2D(BaseAgent):
         #     self.lr_decay(iter, max_iter)
 
         return {"policy_loss": policy_loss.item(), "value_loss": value_loss, "entropy_loss": entropy_loss.mean().item(),
-                "surrogate": surrogate.mean().item(), "surrogate_clipped": surrogate_clipped.mean().item()} 
+                "surrogate": surrogate.mean().item(), "surrogate_clipped": surrogate_clipped.mean().item(),
+                "bc_loss": bc_loss.mean().item(),} 
+
+    def set_old_policy(self):
+        # if self.use_bc:
+        #     pass
+        # else:
+        self.old_actor = deepcopy(self.actor)
+        self.old_actor.requires_grad_(False)
         
     # def lr_decay(self, step, max_step):
     #     lr = self.online_lr * (1 - step / max_step)

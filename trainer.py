@@ -75,6 +75,7 @@ class Trainer:
             expertrb = OfflineReplaybuffer(1100000, (train_env.observation_space.shape[1],), (train_env.action_space.shape[1],))
             expertrb.load(self._cfg.expert_rb_dir)
             expertrb.compute_returns()
+            # import pdb; pdb.set_trace()
             # expertrb.state_normalizer()
             # self.obs_mean, self.obs_std = torch.tensor(expertrb.mean, device=self._device), torch.tensor(expertrb.std, device = self._device)
 

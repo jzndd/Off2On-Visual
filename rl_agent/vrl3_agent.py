@@ -57,67 +57,64 @@ class Identity(nn.Module):
     def forward(self, x):
         return x
 
+# class Stage3ShallowEncoder(nn.Module):
+#     def __init__(self, obs_shape, n_channel):
+#         super().__init__()
 
+#         assert len(obs_shape) == 3
+#         self.repr_dim = n_channel * 35 * 35
 
+#         self.n_input_channel = obs_shape[0]
+#         self.conv1 = nn.Conv2d(obs_shape[0], n_channel, 3, stride=2)
+#         self.conv2 = nn.Conv2d(n_channel, n_channel, 3, stride=1)
+#         self.conv3 = nn.Conv2d(n_channel, n_channel, 3, stride=1)
+#         self.conv4 = nn.Conv2d(n_channel, n_channel, 3, stride=1)
+#         self.relu = nn.ReLU(inplace=True)
 
-class Stage3ShallowEncoder(nn.Module):
-    def __init__(self, obs_shape, n_channel):
-        super().__init__()
+#         # TODO here add prediction head so we can do contrastive learning...
 
-        assert len(obs_shape) == 3
-        self.repr_dim = n_channel * 35 * 35
+#         self.apply(utils.weight_init)
+#         self.normalize_op = transforms.Normalize((0.485, 0.456, 0.406, 0.485, 0.456, 0.406, 0.485, 0.456, 0.406),
+#                                                  (0.229, 0.224, 0.225, 0.229, 0.224, 0.225, 0.229, 0.224, 0.225))
 
-        self.n_input_channel = obs_shape[0]
-        self.conv1 = nn.Conv2d(obs_shape[0], n_channel, 3, stride=2)
-        self.conv2 = nn.Conv2d(n_channel, n_channel, 3, stride=1)
-        self.conv3 = nn.Conv2d(n_channel, n_channel, 3, stride=1)
-        self.conv4 = nn.Conv2d(n_channel, n_channel, 3, stride=1)
-        self.relu = nn.ReLU(inplace=True)
+#         self.compress = nn.Sequential(nn.Linear(self.repr_dim, 50), nn.LayerNorm(50), nn.Tanh())
+#         self.pred_layer = nn.Linear(50, 50, bias=False)
 
-        # TODO here add prediction head so we can do contrastive learning...
+#     def transform_obs_tensor_batch(self, obs):
+#         # transform obs batch before put into the pretrained resnet
+#         # correct order might be first augment, then resize, then normalize
+#         # obs = F.interpolate(obs, size=self.pretrained_model_input_size)
+#         new_obs = obs / 255.0 - 0.5
+#         # new_obs = self.normalize_op(new_obs)
+#         return new_obs
 
-        self.apply(utils.weight_init)
-        self.normalize_op = transforms.Normalize((0.485, 0.456, 0.406, 0.485, 0.456, 0.406, 0.485, 0.456, 0.406),
-                                                 (0.229, 0.224, 0.225, 0.229, 0.224, 0.225, 0.229, 0.224, 0.225))
+#     def _forward_impl(self, x):
+#         x = self.relu(self.conv1(x))
+#         x = self.relu(self.conv2(x))
+#         x = self.relu(self.conv3(x))
+#         x = self.relu(self.conv4(x))
+#         return x
 
-        self.compress = nn.Sequential(nn.Linear(self.repr_dim, 50), nn.LayerNorm(50), nn.Tanh())
-        self.pred_layer = nn.Linear(50, 50, bias=False)
+#     def forward(self, obs):
+#         o = self.transform_obs_tensor_batch(obs)
+#         h = self._forward_impl(o)
+#         h = h.view(h.shape[0], -1)
+#         return h
 
-    def transform_obs_tensor_batch(self, obs):
-        # transform obs batch before put into the pretrained resnet
-        # correct order might be first augment, then resize, then normalize
-        # obs = F.interpolate(obs, size=self.pretrained_model_input_size)
-        new_obs = obs / 255.0 - 0.5
-        # new_obs = self.normalize_op(new_obs)
-        return new_obs
+#     def get_anchor_output(self, obs, actions=None):
+#         # typically go through conv and then compression layer and then a mlp
+#         # used for UL update
+#         conv_out = self.forward(obs)
+#         compressed = self.compress(conv_out)
+#         pred = self.pred_layer(compressed)
+#         return pred, conv_out
 
-    def _forward_impl(self, x):
-        x = self.relu(self.conv1(x))
-        x = self.relu(self.conv2(x))
-        x = self.relu(self.conv3(x))
-        x = self.relu(self.conv4(x))
-        return x
-
-    def forward(self, obs):
-        o = self.transform_obs_tensor_batch(obs)
-        h = self._forward_impl(o)
-        h = h.view(h.shape[0], -1)
-        return h
-
-    def get_anchor_output(self, obs, actions=None):
-        # typically go through conv and then compression layer and then a mlp
-        # used for UL update
-        conv_out = self.forward(obs)
-        compressed = self.compress(conv_out)
-        pred = self.pred_layer(compressed)
-        return pred, conv_out
-
-    def get_positive_output(self, obs):
-        # typically go through conv, compression
-        # used for UL update
-        conv_out = self.forward(obs)
-        compressed = self.compress(conv_out)
-        return compressed
+#     def get_positive_output(self, obs):
+#         # typically go through conv, compression
+#         # used for UL update
+#         conv_out = self.forward(obs)
+#         compressed = self.compress(conv_out)
+#         return compressed
 
 class IdentityEncoder(nn.Module):
     def __init__(self, obs_shape):
@@ -189,7 +186,6 @@ class VRL3Agent(BaseAgent):
         self.ac_type = "vrl3"
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.stage = 2
-
         # ------------------------- set default values end ------------------------
 
         self.critic_target_tau = critic_target_tau

@@ -8,11 +8,13 @@ seed: 0
 task: hammer-v2
 
 is_sparse_reward: True
-is_whole_traj: False
+is_whole_traj: True
 
 save_data: False
 only_bc: False
 img_size: 96
+
+train_with_bc: True
 
 hydra:
   run:
@@ -28,15 +30,17 @@ common:
 ac_type: ppo  # Optional[ppo, bc, iql]
 offline_buffer: /data/jzn/workspace/ppo_alg/Off2On-Visual/data/${task}_${img_size}/expert_rb_with_reward.pkl
 expert_rb_dir: ${offline_buffer}
+traj_num: 50
 
-bc_ckpt_dir: /data/jzn/workspace/ppo_alg/Off2On-Visual/ckpt/${task}_${ac_type}_2D_${agent.ppo_cfg.adv_compute_mode}_seed${common.seed}/bc.pth
+
+bc_ckpt_dir: /data/jzn/workspace/ppo_alg/Off2On-Visual/ckpt/${task}_${ac_type}_2D_${agent.ppo_cfg.adv_compute_mode}/bc_seed${common.seed}_${traj_num}traj.pth
 
 wandb:
   mode: online
   project: offline2online-metaworld_${task}
   entity: jzndd1
   name: seed${seed}_bs${actor_critic.training.batch_size}_minibs${agent.ppo_cfg.mini_batch_size}
-  group: ${ac_type}_${agent.ppo_cfg.adv_compute_mode}
+  group: ${ac_type}_${agent.ppo_cfg.adv_compute_mode}_wholetraj_usebc_use${traj_num}traj
   notes: null
 
 initialization:
@@ -68,7 +72,7 @@ collection:
 # FOR VRL3, try 30000(offline) + 3e6(online)
 training:
   should: True
-  online_max_iter: 3000000 # 3M for VRL3, ppo ; 2e5 for IQL
+  online_max_iter: 2000000 # 3M for VRL3, ppo ; 2e5 for IQL
   bc_actor_warmup_steps: 20000    # 2e4, just for PPO
   bc_critic_warmup_steps: 20000   # 2e4, just for PPO
   offline_steps: 50000     # 5w for VRL3, ppo ; 2e5 for IQL
@@ -96,8 +100,8 @@ actor_critic:
     gamma: 0.985
     lambda_: 0.95
     weight_value_loss: 1.0
-    weight_entropy_loss: 0.001
-    weight_bc_loss: 1.0
+    weight_entropy_loss: 0.01
+    weight_bc_loss: 0.1
     is_continuous_action: true
 
 

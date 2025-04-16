@@ -70,6 +70,9 @@ class Trainer:
 
         if cfg.is_sparse_reward:
             cfg.bc_ckpt_dir = cfg.bc_ckpt_dir.replace("/bc", "_sparse/bc")
+        
+        if cfg.is_whole_traj:
+            cfg.bc_ckpt_dir = cfg.bc_ckpt_dir.replace("/bc", "_wholetraj/bc")
 
         # print(os.path.exists(cfg.bc_ckpt_dir))
         # print(cfg.bc_ckpt_dir)
@@ -88,42 +91,45 @@ class Trainer:
         bc_actor_warmup_steps = self._cfg.training.bc_actor_warmup_steps
         bc_critic_warmup_steps = self._cfg.training.bc_critic_warmup_steps
 
-        if self._cfg.expert_rb_dir is not None:
-            if self._cfg.is_sparse_reward:
-                self._cfg.expert_rb_dir = self._cfg.expert_rb_dir.replace("reward", "reward_sparse")
-            if self._cfg.is_whole_traj:
-                self._cfg.expert_rb_dir = self._cfg.expert_rb_dir.replace(".pkl", "_whole_traj.pkl")
-            
-
-            expertrb = OfflineReplaybuffer(110000, train_env.observation_space.shape[1:], (train_env.action_space.shape[1],))
-            expertrb.load(self._cfg.expert_rb_dir)
-            expertrb.compute_returns()
-            # expertrb.state_normalizer()
-            # self.obs_mean, self.obs_std = torch.tensor(expertrb.mean, device=self._device), torch.tensor(expertrb.std, device = self._device)
-
         # assert self._cfg.actor_critic.training.batch_size >= 1024  # PPO's batch_size >= 1024
         rb = OnlineReplayBuffer(self._cfg.actor_critic.training.batch_size, train_env.observation_space.shape[1:], (train_env.action_space.shape[1],))
 
         to_log = []
 
         # First stage: BC
-        if os.path.exists(self.bc_ckpt_dir):
-            ckpt = torch.load(self.bc_ckpt_dir, self._device)
-            # ckpt = torch.load(self.bc_ckpt_dir, self._device, weights_only=True)
-            self.agent.load_state_dict(ckpt["agent"])
-            print("load bc ckpt from {}".format(self.bc_ckpt_dir))
-        else:
-            for i in range(bc_actor_warmup_steps):
-                metrics = self.agent.bc_actor_update(expertrb)
-                if (i+1) % 10000 == 0:
-                    print(f"bc_actor_warmup_steps: {i}")
-                    self.test_actor_critic(eval_times=10)
+        if self._cfg.train_with_bc:
+            if self._cfg.expert_rb_dir is not None:
+                if self._cfg.is_sparse_reward:
+                    self._cfg.expert_rb_dir = self._cfg.expert_rb_dir.replace("reward", "reward_sparse")
+                if self._cfg.is_whole_traj:
+                    self._cfg.expert_rb_dir = self._cfg.expert_rb_dir.replace(".pkl", "_whole_traj_50traj.pkl")
+                
+                expertrb = OfflineReplaybuffer(110000, train_env.observation_space.shape[1:], (train_env.action_space.shape[1],))
+                expertrb.load(self._cfg.expert_rb_dir)
+                expertrb.compute_returns()
+            
+            if os.path.exists(self.bc_ckpt_dir):
+                ckpt = torch.load(self.bc_ckpt_dir, self._device)
+                # ckpt = torch.load(self.bc_ckpt_dir, self._device, weights_only=True)
+                self.agent.load_state_dict(ckpt["agent"])
+                print("load bc ckpt from {}".format(self.bc_ckpt_dir))
+            else:
+                for i in range(bc_actor_warmup_steps):
+                    metrics = self.agent.bc_actor_update(expertrb)
+                    if (i+1) % 10000 == 0:
+                        print(f"bc_actor_warmup_steps: {i}")
+                        self.test_actor_critic(eval_times=10)
 
-            for i in range(bc_critic_warmup_steps):
-                metrics = self.agent.bc_critic_update(expertrb)
+                for i in range(bc_critic_warmup_steps):
+                    metrics = self.agent.bc_critic_update(expertrb)
 
-            to_log += self.test_actor_critic(self._cfg.evaluation.eval_times)
-            self.save_agents("bc", to_log[0]["actor_critic/test/avg_reward"])
+                to_log += self.test_actor_critic(self._cfg.evaluation.eval_times)
+                self.save_agents("bc", to_log[0]["actor_critic/test/avg_reward"])
+
+                os.makedirs(os.path.dirname(self.bc_ckpt_dir), exist_ok=True)
+                torch.save({
+                    "agent": self.agent.state_dict(),
+                }, self.bc_ckpt_dir)
 
         self.agent.bc_transfer_ac()
 
@@ -139,7 +145,8 @@ class Trainer:
             step = 0
 
             # 2 stage : ac update
-            end_traj_flag = False
+            # end_traj_flag = False
+            # while not done:
             while not done:
                 self.iter += 1
                 with torch.no_grad():
@@ -164,16 +171,15 @@ class Trainer:
                     eps_rew += rew
 
                     if self.domain_name == 'metaworld':
-                        done = torch.tensor(info['success'], device=self._device, dtype=torch.float32)
+                        # done here means win
+                        # terminated here is always False
+                        # trunc here means time limit
+                        if not self._cfg.is_whole_traj:
+                            done = torch.tensor(info['success'], device=self._device, dtype=torch.float32)
+                        else:
+                            done = False
                         done = done or terminated or trunc
                         dw = torch.tensor(done.bool() & (~trunc.bool()), dtype=torch.uint8, device=done.device)
-                        # print("done : {}, dw: {}, trunc:{}".format(done.item(), dw.item(), trunc.item()))
-                        # if self._cfg.is_whole_traj:
-                        #     # here, done means win or loss, trunc means time limit
-                        #     # only when trunc, will end traj
-                        #     end_traj_flag = trunc
-                        # else:
-                        #     end_traj_flag = done
                     else:
                         done = terminated
                         # rerference: https://github.com/Lizhi-sjtu/DRL-code-pytorch/blob/8f767b99ad44990b49f6acf3159660c5594db77e/5.PPO-continuous/PPO_continuous_main.py#L100
@@ -266,9 +272,9 @@ class Trainer:
         to_log = [{"success_rate": success_rate, "avg_reward": avg_reward}]
         # import pdb; pdb.set_trace()
         # T H W C -> T C H W
-        save_frames = np.array(video_recorder.frames).transpose(0, 3, 1, 2)
-        video_wandb = wandb.Video(save_frames, fps=video_recorder.fps, format="mp4")
-        to_log.append({"video": video_wandb})
+        # save_frames = np.array(video_recorder.frames).transpose(0, 3, 1, 2)
+        # video_wandb = wandb.Video(save_frames, fps=video_recorder.fps, format="mp4")
+        # to_log.append({"video": video_wandb})
 
         print(f"{self._cfg.task} :Success rate: {success_rate}, Average reward: {avg_reward}")
         to_log = [{f"actor_critic/test/{k}": v for k, v in d.items()} for d in to_log]
@@ -291,9 +297,8 @@ class Trainer:
 
     def save_eval_data(self, save_img=True):
 
-        dataset_name = f"data_/hammer-v2/"
+        dataset_name = f"data_/{self._cfg.task}/"
         # load policy
-        self.bc_ckpt_dir = "/data/jzn/workspace/ppo_alg/Off2On-Visual/ckpt/disassemble-v2_ppo_2D_gae_seed0_sparse/bc.pth"
         ckpt = torch.load(self.bc_ckpt_dir, self._device)
         self.agent.load_state_dict(ckpt["agent"])
 
@@ -462,9 +467,8 @@ class Trainer:
 
     def save_data(self,):
 
-        dataset_name = f"data_/metaworld_{self._cfg.img_size}/"
+        dataset_name = f"data_/{self._cfg.task}/"
         # load policy
-        self.bc_ckpt_dir = "/data/jzn/workspace/ppo_alg/Off2On-Visual/ckpt/disassemble-v2_ppo_2D_gae_seed0_sparse/bc.pth"
         ckpt = torch.load(self.bc_ckpt_dir, self._device)
         self.agent.load_state_dict(ckpt["agent"])
 
