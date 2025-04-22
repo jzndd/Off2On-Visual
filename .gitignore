@@ -11,3 +11,5 @@ rl_agent/__pycache__/utils.cpython-310.pyc
 ckpt/*
 
 *.sh
+
+data_/

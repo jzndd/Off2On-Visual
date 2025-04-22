@@ -95,6 +95,7 @@ def gen_traj(policy, seed, env_name, ep_num, dataset_name, max_path_length=100, 
                 eps_actions = []
                 eps_rewards = []
                 eps_next_states = []
+                eps_dones = []
                 seq_num += 1
                 seed += 1
 
@@ -113,11 +114,13 @@ def gen_traj(policy, seed, env_name, ep_num, dataset_name, max_path_length=100, 
                 eps_actions = []
                 eps_rewards = []
                 eps_next_states = []
+                eps_dones = []
                 seed += 1
+                steps = 0
                 env = make_env(seed=seed, max_path_length=max_path_length, render_mode="rgb_array")
                 obs, _ = env.reset()
 
-                print(f"Failed {env_name}, {seq_num}, Episode return: {ret}, info: {info}")
+                print(f"Failed {env_name}, {seq_num}, Episode return: {ret}")
 
     os.makedirs(f"{dataset_name}/{env_name}", exist_ok=True)
     rb.save(f"{dataset_name}/{env_name}/expert_rb_with_reward_state.pkl")
@@ -142,7 +145,7 @@ def gen_traj(policy, seed, env_name, ep_num, dataset_name, max_path_length=100, 
 
 if __name__ == "__main__":
 
-    traj_num = 10
+    traj_num = 50
     dataset_name = f"data/"
     seed = list(range(traj_num)) 
     env_seed = 1500
@@ -173,11 +176,11 @@ if __name__ == "__main__":
     # env_name = 'boxclose-v2'
     # gen_traj(policy, env, env_name, traj_num, dataset_name)
 
-    from metaworld.envs.mujoco.sawyer_xyz.v2 import SawyerButtonPressTopdownEnvV2 as Env           
-    from metaworld.policies import  SawyerButtonPressTopdownV2Policy as EnvPolicy
-    policy = EnvPolicy()
-    env_name = 'button-press-topdown-v2'
-    gen_traj(policy, env_seed, env_name, traj_num, dataset_name, save_data=save_data, use_random=use_random)
+    # from metaworld.envs.mujoco.sawyer_xyz.v2 import SawyerButtonPressTopdownEnvV2 as Env           
+    # from metaworld.policies import  SawyerButtonPressTopdownV2Policy as EnvPolicy
+    # policy = EnvPolicy()
+    # env_name = 'button-press-topdown-v2'
+    # gen_traj(policy, env_seed, env_name, traj_num, dataset_name, save_data=save_data, use_random=use_random)
 
     # from metaworld.envs.mujoco.sawyer_xyz.v2 import SawyerButtonPressTopdownWallEnvV2 as Env           
     # from metaworld.policies import  SawyerButtonPressTopdownWallV2Policy as EnvPolicy
@@ -224,11 +227,11 @@ if __name__ == "__main__":
     # env_name = 'dial-turn-v2'
     # gen_traj(policy, env, env_name, traj_num, dataset_name)
 
-    # from metaworld.envs.mujoco.sawyer_xyz.v2 import SawyerNutDisassembleEnvV2 as Env          # Failed
-    # from metaworld.policies import SawyerDisassembleV2Policy as EnvPolicy
-    # policy = EnvPolicy()
-    # env_name = 'disassemble-v2'
-    # gen_traj(policy, env, env_name, traj_num, dataset_name)
+    from metaworld.envs.mujoco.sawyer_xyz.v2 import SawyerNutDisassembleEnvV2 as Env          # Failed
+    from metaworld.policies import SawyerDisassembleV2Policy as EnvPolicy
+    policy = EnvPolicy()
+    env_name = 'disassemble-v2'
+    gen_traj(policy, env_seed, env_name, traj_num, dataset_name, save_data=save_data, use_random=use_random)
 
     # from metaworld.envs.mujoco.sawyer_xyz.v2 import SawyerDoorCloseEnvV2 as Env          # Failed
     # from metaworld.policies import SawyerDoorCloseV2Policy as EnvPolicy

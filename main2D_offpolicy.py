@@ -5,7 +5,7 @@ from mw_wrapper import TorchEnv, make_mw_env
 import torch
 from omegaconf import DictConfig, OmegaConf
 import hydra
-from trainer2D import Trainer
+from trainer2D_offpolicy import Trainer
 os.environ["MUJOCO_GL"] = "egl"
 
 
@@ -25,9 +25,13 @@ def main(cfg: DictConfig) -> None:
         cfg.actor_critic.training.batch_size = 256
         cfg.actor_critic.training.steps_per_epoch = 10
         cfg.actor_critic.training.steps_first_epoch = 10
-        #
+        # for ppo
         cfg.training.bc_actor_warmup_steps = 10
         cfg.training.bc_critic_warmup_steps = 10
+
+        # for vrl3
+        cfg.training.online_max_iter=10000
+        cfg.training.offline_steps = 50
         # cfg.training.online_max_iter = 2000
         # cfg.evaluation.every_iter = 1000
         # cfg.evaluation.eval_times = 1

@@ -434,6 +434,25 @@ class OfflineReplaybuffer:
         self.obs = (self.obs - self.mean) / (self.std + 1e-8)
         self.obs_ = (self.obs_ - self.mean) / (self.std + 1e-8)
 
+def merge_batches(batch1, batch2):
+    """
+    Merges two batches sampled from OfflineReplaybuffer.
+
+    Args:
+        batch1 (tuple): The first batch from buffer1.sample().
+        batch2 (tuple): The second batch from buffer2.sample().
+
+    Returns:
+        tuple: A merged batch (obs, act, rew, done, returns, next_obs)
+    """
+    merged = []
+    for b1, b2 in zip(batch1, batch2):
+        if b1 is None or b2 is None:
+            merged.append(None)
+        else:
+            merged.append(torch.cat([b1, b2], dim=0))
+    return tuple(merged)
+
 # test
 if __name__ == "__main__":
     # test compute_returns

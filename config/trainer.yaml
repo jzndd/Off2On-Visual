@@ -5,7 +5,7 @@ defaults:
 
 debug_mode: false
 seed: 0
-task: hammer-v2
+task: disassemble-v2
 
 img_size: 96
 
@@ -21,10 +21,15 @@ common:
   resume: False # do not modify, set by scripts/resume.sh only.
 
 ac_type: ppo  # Optional[ppo, bc, iql]
-offline_buffer: /data/jzn/workspace/ppo_alg/Off2On-Visual/data/${task}/expert_rb_with_reward_state.pkl
+offline_buffer: /DATA/disk0/jzn/Off2On-Visual/data/${task}/expert_rb_with_reward_state.pkl
 expert_rb_dir: ${offline_buffer}
 
-bc_ckpt_dir: /data/jzn/workspace/ppo_alg/Off2On-Visual/ckpt/${task}/${ac_type}_state_${agent.ppo_cfg.adv_compute_mode}_seed${common.seed}/bc.pth
+save_data: False
+only_bc: False
+img_size: 96
+
+
+bc_ckpt_dir: /DATA/disk0/jzn/ckpt/Off2On-Visual/${task}/${ac_type}_state_${agent.ppo_cfg.adv_compute_mode}_seed${common.seed}/bc.pth
 
 wandb:
   mode: online
@@ -64,9 +69,8 @@ collection:
 training:
   should: True
   online_max_iter: 3000000 # 3M for VRL3, ppo ; 2e5 for IQL
-  bc_actor_warmup_steps: 400000    # 4e5, just for PPO
-  bc_critic_warmup_steps: 2000000   # 2e6, just for PPO
-  offline_steps: 50000     # 5w for VRL3, ppo ; 2e5 for IQL
+  bc_actor_warmup_steps: 20001    # 2e4, just for PPO
+  bc_critic_warmup_steps: 20001   # 2e4, just for PPO
 
 evaluation:
   should: True

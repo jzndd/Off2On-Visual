@@ -295,10 +295,11 @@ class Trainer:
             "agent": self.agent.state_dict(),
         }, agent_path)
 
-    def save_eval_data(self, save_img=True):
+    def save_eval_data(self, ):
 
-        dataset_name = f"data_/{self._cfg.task}/"
+        dataset_name = f"data_/{self._cfg.task}_{self._cfg.img_size}/"
         # load policy
+        self.bc_ckpt_dir = self._cfg.bc_ckpt_dir
         ckpt = torch.load(self.bc_ckpt_dir, self._device)
         self.agent.load_state_dict(ckpt["agent"])
 
@@ -312,7 +313,7 @@ class Trainer:
         eps_rewards = []
         eps_terminateds = []
         eps_truncateds = []
-        eps_save_imgs = []
+        eps_save_imgs_to_video = []
 
         success_data = []
         random_data = []
@@ -332,7 +333,7 @@ class Trainer:
             # if save_img:
                 # 1 * 3 * 96 * 96 -> 96 * 96 * 3
             cam_img = obs.squeeze(0).add(1).div(2).mul(255).byte().permute(1, 2, 0)
-            eps_save_imgs.append(cam_img.cpu().numpy())
+            eps_save_imgs_to_video.append(cam_img.cpu().numpy())
             eps_imgs.append(cam_img)
 
             with torch.no_grad():
@@ -376,7 +377,7 @@ class Trainer:
                 if success_flag and success_traj < success_trajs:
                     assert len(eps_imgs) == len(eps_actions) == len(eps_rewards) == len(eps_terminateds) == len(eps_truncateds) == 50
                     for i, (img, action, reward, terminated, truncated, img_to_save) in enumerate(zip(
-                        eps_imgs, eps_actions, eps_rewards, eps_terminateds, eps_truncateds, eps_save_imgs
+                        eps_imgs, eps_actions, eps_rewards, eps_terminateds, eps_truncateds, eps_save_imgs_to_video
                         )):
                             img, action, reward, terminated, truncated = to_np((img, action, reward, terminated, truncated))
                             success_data.append({
@@ -412,7 +413,7 @@ class Trainer:
                 elif not success_flag and random_traj < random_trajs:
                     assert len(eps_imgs) == len(eps_actions) == len(eps_rewards) == len(eps_terminateds) == len(eps_truncateds) == 50
                     for i, (img, action, reward, terminated, truncated, img_to_save) in enumerate(zip(
-                        eps_imgs, eps_actions, eps_rewards, eps_terminateds, eps_truncateds, eps_save_imgs
+                        eps_imgs, eps_actions, eps_rewards, eps_terminateds, eps_truncateds, eps_save_imgs_to_video
                         )):
                             img, action, reward, terminated, truncated = to_np((img, action, reward, terminated, truncated))
                             random_data.append({
@@ -454,7 +455,7 @@ class Trainer:
                 eps_rewards = []
                 eps_terminateds = []
                 eps_truncateds = []
-                eps_save_imgs = []
+                eps_save_imgs_to_video = []
                 seed = random.randint(0, 2**31 - 1)
                 obs, _ = train_env.reset(seed=[seed + i for i in range(train_env.num_envs)])
                 done = False
@@ -467,15 +468,16 @@ class Trainer:
 
     def save_data(self,):
 
-        dataset_name = f"data_/{self._cfg.task}/"
+        dataset_name = f"data_/{self._cfg.task}_{self._cfg.img_size}/"
         # load policy
+        self.bc_ckpt_dir = self._cfg.bc_ckpt_dir
         ckpt = torch.load(self.bc_ckpt_dir, self._device)
         self.agent.load_state_dict(ckpt["agent"])
 
         train_env = self.registered_env_func(num_envs=1, device=self._device, **self._cfg.env.train)
 
-        success_trajs = 75 ; success_traj = 0
-        random_trajs = 75 ; random_traj = 0
+        success_trajs = 75 ; success_traj = 0         # 代表成功轨迹
+        random_trajs = 75 ; random_traj = 0           # 代表失败轨迹
 
         eps_imgs = []
         eps_actions = []

@@ -95,7 +95,7 @@ class PPOAgent2D(BaseAgent):
         self.fix_encoder = False
     
     @torch.no_grad()
-    def predict_act(self, obs: torch.Tensor, eval_mode=False) -> ActorCriticOutput:
+    def predict_act(self, obs: torch.Tensor, eval_mode=False, **kwargss) -> ActorCriticOutput:
         assert obs.ndim == 4  # Ensure observation shape is correct
         h = self.encoder(obs).flatten(start_dim=1)
         if self.adv_compute_mode == 'tradition' and not eval_mode:
@@ -188,7 +188,7 @@ class PPOAgent2D(BaseAgent):
             {'params': self.encoder.parameters(), 'lr': self.online_lr},
         ])
 
-        self.fix_encoder = True
+        self.fix_encoder = False
 
         self.set_old_policy()
         # self.encoder.requires_grad_(False)

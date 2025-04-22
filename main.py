@@ -14,6 +14,7 @@ def run(cfg, root_dir):
 def main(cfg: DictConfig) -> None:
     setup_visible_cuda_devices(cfg.common.devices)
     root_dir = Path(hydra.utils.get_original_cwd())
+    cfg.wandb.mode = "disabled"
 
     if cfg.debug_mode:
         cfg.wandb.mode = "disabled"         # If debug mode, disable use of wandb

@@ -43,8 +43,8 @@ def make_env(seed=4, max_path_length=500, img_size=128, **kwargs):
 def gen_traj(policy, seed, env_name, ep_num, dataset_name, max_path_length=100, 
              save_data=False, use_random=True, 
              use_sparse_reward=True, save_whole_traj=False,
-             img_size=96):
-    action_repeat = 2
+             img_size=96, action_repeat=2):
+    action_repeat = action_repeat
     env = make_env(seed=seed, max_path_length=max_path_length, img_size=img_size, render_mode="rgb_array")
     obs, info = env.reset()
     ret = 0
@@ -292,14 +292,14 @@ if __name__ == "__main__":
     #          use_sparse_reward=use_sparse_reward,
     #          save_whole_traj=save_whole_traj)
 
-    from metaworld.envs.mujoco.sawyer_xyz.v2 import SawyerCoffeePullEnvV2 as Env
-    from metaworld.policies import SawyerCoffeePullV2Policy as EnvPolicy
-    policy = EnvPolicy()
-    env_name = 'coffee-pull-v2'
-    gen_traj(policy, env_seed, env_name, traj_num, dataset_name, save_data=save_data, 
-             use_random=use_random, 
-             use_sparse_reward=use_sparse_reward,
-             save_whole_traj=save_whole_traj)
+    # from metaworld.envs.mujoco.sawyer_xyz.v2 import SawyerCoffeePullEnvV2 as Env
+    # from metaworld.policies import SawyerCoffeePullV2Policy as EnvPolicy
+    # policy = EnvPolicy()
+    # env_name = 'coffee-pull-v2'
+    # gen_traj(policy, env_seed, env_name, traj_num, dataset_name, save_data=save_data, 
+    #          use_random=use_random, 
+    #          use_sparse_reward=use_sparse_reward,
+    #          save_whole_traj=save_whole_traj)
 
     # from metaworld.envs.mujoco.sawyer_xyz.v2 import SawyerCoffeePushEnvV2 as Env        # Failed
     # from metaworld.policies import SawyerCoffeePushV2Policy as EnvPolicy
@@ -453,15 +453,15 @@ if __name__ == "__main__":
     #          save_whole_traj=save_whole_traj,
     #          img_size=img_size)
 
-    from metaworld.envs.mujoco.sawyer_xyz.v2 import SawyerLeverPullEnvV2 as Env           # Success
-    from metaworld.policies import  SawyerLeverPullV2Policy as EnvPolicy
-    policy = EnvPolicy()
-    env_name = 'lever-pull-v2'
-    gen_traj(policy, env_seed, env_name, traj_num, dataset_name, save_data=save_data, 
-             use_random=use_random, 
-             use_sparse_reward=use_sparse_reward,
-             save_whole_traj=save_whole_traj,
-             img_size=img_size)
+    # from metaworld.envs.mujoco.sawyer_xyz.v2 import SawyerLeverPullEnvV2 as Env           # Success
+    # from metaworld.policies import  SawyerLeverPullV2Policy as EnvPolicy
+    # policy = EnvPolicy()
+    # env_name = 'lever-pull-v2'
+    # gen_traj(policy, env_seed, env_name, traj_num, dataset_name, save_data=save_data, 
+    #          use_random=use_random, 
+    #          use_sparse_reward=use_sparse_reward,
+    #          save_whole_traj=save_whole_traj,
+    #          img_size=img_size)
 
     # from metaworld.envs.mujoco.sawyer_xyz.v2 import SawyerPegInsertionSideEnvV2 as Env           # Failed
     # from metaworld.policies import  SawyerPegInsertionSideV2Policy as EnvPolicy

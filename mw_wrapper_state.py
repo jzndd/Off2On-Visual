@@ -217,7 +217,7 @@ class TorchEnv(gymnasium.Wrapper):
 if __name__ == "__main__":
 
     device = torch.device("cuda:0")
-    mw_env = make_mw_env("coffee-push-v2", 1, device, 128)
+    mw_env = make_mw_env("disassemble-v2", 1, device, 128)
     obs, info = mw_env.reset()
     traj = 0
     while(1):
@@ -231,6 +231,14 @@ if __name__ == "__main__":
     print("end", end)
     print("trunc", trunc)
     print("traj", traj) 
+
+    import matplotlib.pyplot as plt
+    obs = mw_env.render()
+    obs = obs[0]
+    plt.imshow(obs, cmap='viridis')  # Adjust cmap based on your data
+    plt.colorbar()
+    plt.title("Observation")
+    plt.savefig("/DATA/disk0/jzn/Diamond/observation.png")
 
     # print(obs.shape)
     # obs_np = obs[0].add(1).div(2).mul(255).byte().permute(1,2,0).cpu().numpy()

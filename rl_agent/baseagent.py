@@ -37,7 +37,8 @@ class ActorCriticConfig:
     is_continuous_action: Optional[bool] = True
     acitive_fn: Optional[str] = "tanh"
     online_lr: Optional[float] = 3e-6
-    frame_stack: Optional[int] = 1
+    frame_stack: Optional[int] = 1                 
+    image_size: Optional[int] = 96                # get from config (img_size)
     
 class BaseAgent(nn.Module):
     def __init__(self, cfg: ActorCriticConfig) -> None:

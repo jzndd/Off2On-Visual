@@ -61,8 +61,6 @@ class ImplicitQLearning(BaseAgent):
     def predict_act(self, obs: torch.Tensor, eval_mode=False, step=None):
         assert obs.ndim == 4  # Ensure observation shape is correct
         x = self.encoder(obs).flatten(start_dim=1)
-        # return ActorCriticOutput(self.actor.get_action(x, eval_mode=eval_mode), self.critic(x))
-        # return ActorCriticOutput(self.actor.get_action(x, eval_mode=eval_mode))
         return self.actor.get_action(x, eval_mode=True)
         
     # indeed offline update, however, to keep consistency with other agents

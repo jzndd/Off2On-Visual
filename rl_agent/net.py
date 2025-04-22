@@ -1,3 +1,5 @@
+import itertools
+import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -217,6 +219,151 @@ class IQLCritic(nn.Module):
             self._Q.parameters(),
             lr=online_lr,
             )
+        
+class EnsembledLinear(nn.Module):
+    def __init__(self,
+                 in_features: int,
+                 out_features: int,
+                 ensemble_size: int) -> None:
+        super().__init__()
+        self.in_features = in_features
+        self.out_features = out_features
+        self.ensemble_size = ensemble_size
+
+        self.weight = nn.Parameter(torch.empty(ensemble_size, in_features, out_features))
+        self.bias = nn.Parameter(torch.empty(ensemble_size, 1, out_features))
+
+        self.reset_parameters()
+    
+    def reset_parameters(self):
+        for layer in range(self.ensemble_size):
+            nn.init.kaiming_uniform_(self.weight[layer], a=math.sqrt(5))
+
+        fan_in, _ = nn.init._calculate_fan_in_and_fan_out(self.weight[0])
+        bound = 0
+        if fan_in > 0:
+            bound = 1 / math.sqrt(fan_in)
+
+        nn.init.uniform_(self.bias, -bound, bound)
+    
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        out = x @ self.weight + self.bias
+        return out
+
+
+class EnsembleCritic(nn.Module):
+    '''
+        Although SAC-RND is an ensemble-free method, this class
+        is realised for convenience in using 2 separate Critics
+        in a TD3 manner: 
+            - https://arxiv.org/abs/1802.09477
+            - https://arxiv.org/abs/2106.06860
+    '''
+    def __init__(self,
+                 cfg: ActorCriticConfig,
+                 repr_dim: int,
+                 num_critics: int = 2,
+                 layer_norm: bool = True,
+                 edac_init: bool = True,
+                 use_trunk=True) -> None:
+        super().__init__()
+
+        self.use_trunk = use_trunk
+        self.repr_dim = repr_dim
+        self.action_dim = cfg.num_actions
+        self.hidden_dim = cfg.hidden_dim
+
+        if self.use_trunk:
+            self.input_layer = nn.Sequential(
+                nn.Linear(repr_dim, cfg.feature_dim),
+                nn.ReLU()
+            )
+            input_dim = cfg.feature_dim
+        else:
+            input_dim = repr_dim
+
+        #block = nn.LayerNorm(hidden_dim) if layer_norm else nn.Identity()
+        self.num_critics = num_critics
+
+        self.critic = nn.Sequential(
+            EnsembledLinear(input_dim + self.action_dim, cfg.hidden_dim, num_critics),
+            nn.LayerNorm(cfg.hidden_dim) if layer_norm else nn.Identity(),
+            nn.ReLU(),
+            EnsembledLinear(cfg.hidden_dim, cfg.hidden_dim, num_critics),
+            nn.LayerNorm(cfg.hidden_dim) if layer_norm else nn.Identity(),
+            nn.ReLU(),
+            EnsembledLinear(cfg.hidden_dim, cfg.hidden_dim, num_critics),
+            nn.LayerNorm(cfg.hidden_dim) if layer_norm else nn.Identity(),
+            nn.ReLU(),
+            EnsembledLinear(cfg.hidden_dim, 1, num_critics)
+        )
+
+        if edac_init:
+            # init as in the EDAC paper
+            for layer in self.critic[::3]:
+                nn.init.constant_(layer.bias, 0.1)
+
+            nn.init.uniform_(self.critic[-1].weight, -3e-3, 3e-3)
+            nn.init.uniform_(self.critic[-1].bias, -3e-3, 3e-3)
+    
+    def forward(self, state: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
+        if self.use_trunk:
+            h = self.input_layer(state)
+            state = h
+        concat = torch.cat([state, action], dim=-1)
+        concat = concat.unsqueeze(0)
+        concat = concat.repeat_interleave(self.num_critics, dim=0)
+        q_values = self.critic(concat)
+        return q_values
+    
+    def _reduce_ensemble(
+        self, y: torch.Tensor, reduction: str = "min", dim: int = 0, lam: float = 0.75
+    ) -> torch.Tensor:
+        if reduction == "min":
+            return torch.min(y, dim=dim)[0]
+        elif reduction == "max":
+            return torch.max(y, dim=dim)[0]
+        elif reduction == "mean":
+            return torch.mean(y, dim=dim)[0]
+        elif reduction == "std":
+            return torch.std(y, dim=dim)[0]
+        elif reduction == "none":
+            return y
+        raise ValueError
+    
+    def compute_q(self, state, action, reduction="min") -> torch.Tensor: 
+        Q = self(state,action)                     
+        return self._reduce_ensemble(Q, reduction=reduction)
+    
+    def compute_q_weighted(
+            self,
+            state: torch.Tensor,
+            action: Optional[torch.Tensor],
+            reduction: str = "min",
+            lam: float = 0.75,
+        ) -> torch.Tensor:
+
+        Q = self(state, action)
+        Q = Q.unsqueeze(1)
+
+        tuple_list = list(itertools.combinations(Q, 2))
+        q_list = []
+        for i in range(len(tuple_list)):
+            values = torch.cat([tuple_list[i][0], tuple_list[i][1]])
+            q_list.append(self._reduce_ensemble(values, reduction, lam=lam))
+
+        return torch.stack(q_list, dim=0).mean(dim=0)
+    
+    def compute_loss(self, state, action, y):
+        
+        total_loss = 0.0
+        q_list = self(state, action)
+
+        for q in q_list:
+            loss = F.mse_loss(q, y)
+            total_loss += loss.mean()
+
+        return total_loss
     
 # ---------------------------- Actor ---------------------------- #
 
@@ -273,6 +420,63 @@ class VRL3Actor(nn.Module):
         dist = utils.TruncatedNormal(mu, std)
         return dist, pretanh
     
+class DrQv2Actor(nn.Module):
+    def __init__(self, cfg: ActorCriticConfig, repr_dim, use_trunk=True, use_std_share_network=False) -> None:
+        super().__init__()
+
+        self.use_trunk = use_trunk
+        if self.use_trunk:  
+            self.trunk = nn.Sequential(nn.Linear(repr_dim, cfg.feature_dim),
+                                    nn.ReLU())
+            input_dim = cfg.feature_dim
+        else:
+            input_dim = repr_dim
+
+        self.use_std_share_network = use_std_share_network
+        if self.use_std_share_network:
+            self.actor_linear = MLP(input_dim, cfg.hidden_dim, cfg.depth, cfg.num_actions * 2, activation=cfg.acitive_fn, final_activation=None, last_gain=0.01)
+        else:
+            self.actor_linear = MLP(input_dim, cfg.hidden_dim, cfg.depth, cfg.num_actions, activation=cfg.acitive_fn, final_activation=None, last_gain=0.01)
+            self.log_std = nn.Parameter(torch.zeros(1, cfg.num_actions))
+
+    def get_action(self, x: Tensor, eval_mode=False) -> Tensor:
+        mean, std = self.forward(x)
+        if eval_mode:
+            action: Tensor = mean
+            action = action.clamp(-1, 1)
+            return action.detach()
+        else:
+            dist = utils.TruncatedNormal(mean, std)
+            action: Tensor = dist.sample()
+            action = torch.clamp(action, -1, 1)
+            log_prob = dist.log_prob(action)  # Summing over action dimensions
+            return action, log_prob
+        
+    def get_dist(self, x: Tensor, std=None):
+        mean, std = self.forward(x, std)
+        return utils.TruncatedNormal(mean, std)
+
+    def forward(self, x: Tensor, std=None):
+        if self.use_trunk:
+            x = self.trunk(x)
+
+        if self.use_std_share_network:
+            output = self.actor_linear(x)  # mean and std
+            mean, log_std = output.split(output.shape[1] // 2, dim=1)
+            std = torch.exp(log_std)
+        else:
+            mean = self.actor_linear(x)
+            if std is not None:
+                log_std = self.log_std.expand_as(mean)
+                std = torch.exp(log_std)
+            else:
+                std = torch.ones_like(mean) * std
+
+        # deal with mean
+        mean = torch.tanh(mean)
+        
+        return mean, std
+    
 class Actorlog(nn.Module):
     def __init__(self, cfg: ActorCriticConfig, repr_dim, use_trunk=True, use_std_share_network=False) -> None:
         super().__init__()
@@ -305,26 +509,25 @@ class Actorlog(nn.Module):
             log_prob = dist.log_prob(action)  # Summing over action dimensions
             return action, log_prob
         
-    def get_dist(self, x: Tensor):
-        mean, std = self.forward(x)
+    def get_dist(self, x: Tensor, std=None):
+        mean, std = self.forward(x, std)
         return Normal(mean, std)
 
-    def forward(self, x: Tensor):
+    def forward(self, x: Tensor, std=None):
         if self.use_trunk:
             x = self.trunk(x)
 
         if self.use_std_share_network:
             output = self.actor_linear(x)  # mean and std
             mean, log_std = output.split(output.shape[1] // 2, dim=1)
+            std = torch.exp(log_std)
         else:
             mean = self.actor_linear(x)
-            log_std = self.log_std.expand_as(mean)
-
-        # log_std_clip
-        # log_std = log_std.clamp(-5, 0.)
-
-        # deal with std
-        std = torch.exp(log_std)
+            if std is not None:
+                log_std = self.log_std.expand_as(mean)
+                std = torch.exp(log_std)
+            else:
+                std = torch.ones_like(mean) * std
 
         # deal with mean
         mean = torch.tanh(mean)
@@ -337,11 +540,17 @@ class ActorCriticEncoder(nn.Module):
         super().__init__()
 
         # self.repr_dim = 32 * 57 * 57
-        # 84 * 84 * 3 input
-        # self.repr_dim = cfg.frame_stack * 32 * 35 * 35
-
-        # 96 * 96 * 3 input
-        self.repr_dim = cfg.frame_stack * 32 * 41 * 41
+        if cfg.img_size == 84:
+            # 84 * 84 * 3 input
+            self.repr_dim = cfg.frame_stack * 32 * 35 * 35
+        elif cfg.img_size == 96:
+            # 96 * 96 * 3 input
+            self.repr_dim = cfg.frame_stack * 32 * 41 * 41
+        elif cfg.img_size == 128:
+            # 128 * 128 * 3 input
+            self.repr_dim = cfg.frame_stack * 32 * 57 * 57
+        else:
+            raise ValueError("img_size should be 84, 96 or 128")
 
         self.convnet = nn.Sequential(nn.Conv2d(3, 32, 3, stride=2),
                                      nn.ReLU(), nn.Conv2d(32, 32, 3, stride=1),
