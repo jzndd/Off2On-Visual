@@ -272,7 +272,7 @@ class OnlineReplayBuffer:
     
 
 class OfflineReplaybuffer:
-    def __init__(self, capacity, obs_shape=(3, 84, 84), action_shape=(4,)):
+    def __init__(self, capacity, obs_shape=(3, 84, 84), action_shape=(4,), frame_stack=1):
         """
         Initializes the ReplayBuffer.
 
@@ -282,8 +282,14 @@ class OfflineReplaybuffer:
             act_dim (int): Dimension of actions.
         """
         self.capacity = capacity
+        self.frame_stack = frame_stack
         self.ptr = 0
         self.size = 0
+
+        c, h, w = obs_shape
+        if c == 3:
+            c = c * frame_stack
+        obs_shape = (c, h, w)
 
         # Allocate storage for buffer
         self.obs = np.zeros((capacity, *obs_shape), dtype=np.float32)
@@ -308,8 +314,11 @@ class OfflineReplaybuffer:
         """
         # detect obs
         # image input
+        assert len(obs.shape) == 3 or len(obs.shape) == 4
+
+        # only when offline, the obs is 3D, need to deal
         if len(obs.shape) == 3:
-            if obs.shape[2] == 3:
+            if obs.shape[2] == 3 * self.frame_stack:
                 # (128,128,3) -> (3,128,128)
                 obs = np.transpose(obs, (2,0,1))
                 next_obs = np.transpose(next_obs, (2,0,1))
@@ -317,6 +326,8 @@ class OfflineReplaybuffer:
             if obs.max() > 1:
                 obs = ( obs / 255.0 ) * 2 - 1
                 next_obs = ( next_obs / 255.0 ) * 2 - 1
+        
+        assert obs.max() <= 1 and obs.min() >= -1 and obs.min() <= 0, f"obs max {obs.max()} min {obs.min()}"
 
         self.obs[self.ptr] = obs
         self.rew[self.ptr] = rew
@@ -339,7 +350,7 @@ class OfflineReplaybuffer:
         if self.size == 0:
             raise ValueError("Buffer is empty, cannot sample.")
 
-        indices = np.random.choice(self.size - 1, mini_batch_size, replace=False)
+        indices = np.random.choice(self.size - 1, int(mini_batch_size), replace=False)
 
         # Convert numpy arrays to torch tensors
         obs_batch = torch.tensor(self.obs[indices], dtype=torch.float32)

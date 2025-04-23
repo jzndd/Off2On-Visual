@@ -7,6 +7,8 @@ debug_mode: false
 seed: 0
 task: disassemble-v2
 
+use_trunk: False
+
 img_size: 96
 
 hydra:

@@ -4,7 +4,6 @@ import random
 from typing import List, Tuple, Union
 
 import cv2
-from mw_wrapper import make_mw_env
 # from dmc_wrapper_state import get_d4rl_env
 import torch
 from omegaconf import DictConfig, OmegaConf
@@ -44,16 +43,14 @@ class Trainer:
         self._save_path = Path("saved_models")
         self._save_path.mkdir(parents=True, exist_ok=True)
 
-        # if cfg.task in ['button-press-topdown-v2', 'hammer-v2', 'basketball-v2', "button-press-v2"]:
-        #     self.registered_env_func = make_mw_env
-        #     self.domain_name = 'metaworld'
-        # else:
-        #     raise NotImplementedError("Only metaworld supported for now")
-        #     self.registered_env_func = get_d4rl_env
-        #     self.domain_name = 'dmc'
-
-        self.registered_env_func = make_mw_env
-        self.domain_name = 'metaworld'
+        if cfg.task != "walker_walk":
+            from mw_wrapper import make_mw_env
+            self.registered_env_func = make_mw_env
+            self.domain_name = 'metaworld'
+        else:
+            from dmc_wrapper import get_dmc_env
+            self.registered_env_func = get_dmc_env
+            self.domain_name = 'dmc'
 
         env = self.registered_env_func(num_envs=1,  device=self._device, **cfg.env.train)
         cfg.agent.actor_critic_cfg.num_actions = deepcopy(env.num_actions)
@@ -91,25 +88,24 @@ class Trainer:
 
         # First stage: BC
         if self._cfg.train_with_bc:
-            if self._cfg.expert_rb_dir is not None:
-                if self._cfg.is_sparse_reward:
-                    self._cfg.expert_rb_dir = self._cfg.expert_rb_dir.replace("reward", "reward_sparse")
-                if self._cfg.is_whole_traj:
-                    self._cfg.expert_rb_dir = self._cfg.expert_rb_dir.replace(".pkl", "_whole_traj_50traj.pkl")
+            if self.domain_name == 'metaworld':
+                if self._cfg.expert_rb_dir is not None:
+                    if self._cfg.is_sparse_reward:
+                        self._cfg.expert_rb_dir = self._cfg.expert_rb_dir.replace("reward", "reward_sparse")
+                    if self._cfg.is_whole_traj:
+                        self._cfg.expert_rb_dir = self._cfg.expert_rb_dir.replace(".pkl", "_whole_traj_50traj.pkl")
                 
-                expertrb = OfflineReplaybuffer(110000, train_env.observation_space.shape[1:], (train_env.action_space.shape[1],))
-                expertrb.load(self._cfg.expert_rb_dir)
-                # expertrb.compute_returns()
+            expertrb = OfflineReplaybuffer(2000000, train_env.observation_space.shape[1:], (train_env.action_space.shape[1],))
+            expertrb.load(self._cfg.expert_rb_dir)
             
             if os.path.exists(self.bc_ckpt_dir):
                 ckpt = torch.load(self.bc_ckpt_dir, self._device)
-                # ckpt = torch.load(self.bc_ckpt_dir, self._device, weights_only=True)
                 self.agent.load_state_dict(ckpt["agent"])
                 print("load bc ckpt from {}".format(self.bc_ckpt_dir))
             else:
                 for i in range(cfg.training.offline_steps):
                     metrics = self.agent.update(expertrb, i)
-                    if (i+1) % 10000 == 0:
+                    if (i+1) % 5000 == 0:
                         print(f"bc_actor_warmup_steps: {i}")
                         to_log = self.test_actor_critic(eval_times=10)
 
@@ -160,7 +156,7 @@ class Trainer:
 
                     next_obs, rew, terminated, trunc, info = train_env.step(real_act)
 
-                    if self._cfg.is_sparse_reward:
+                    if self.domain_name == "metaworld" and self._cfg.is_sparse_reward:
                         rew = torch.tensor(info['success'], device=self._device, dtype=torch.float32)
 
                     step += 1
@@ -177,7 +173,7 @@ class Trainer:
                         done = done or terminated or trunc
                         dw = torch.tensor(done.bool() & (~trunc.bool()), dtype=torch.uint8, device=done.device)
                     else:
-                        done = terminated
+                        done = terminated or trunc
                         # rerference: https://github.com/Lizhi-sjtu/DRL-code-pytorch/blob/8f767b99ad44990b49f6acf3159660c5594db77e/5.PPO-continuous/PPO_continuous_main.py#L100
                         dw = torch.tensor(done.bool() & (~trunc.bool()), dtype=torch.uint8, device=done.device) # loss and win but not trunc (because if loss, there is no next state)
 
@@ -215,7 +211,7 @@ class Trainer:
 
     @torch.no_grad()
     def test_actor_critic(self, eval_times=25):
-        test_env = make_mw_env(num_envs=self._cfg.collection.test.num_envs, device=self._device, **self._cfg.env.test)
+        test_env = self.registered_env_func(num_envs=self._cfg.collection.test.num_envs, device=self._device, **self._cfg.env.test)
         total_reward = 0.0
         success_rate = 0.0
         video_recorder = VideoRecorder(self._path_video_dir)
@@ -244,7 +240,8 @@ class Trainer:
                 steps += 1
                 total_reward += rew.sum().item()
 
-                success |= bool(info['success'])
+                if self.domain_name == 'metaworld':
+                    success |= bool(info['success'])
 
                 obs = next_obs
 

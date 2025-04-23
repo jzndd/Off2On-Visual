@@ -35,10 +35,13 @@ class ActorCriticConfig:
     num_actions: Optional[int] = None
     num_states:  Optional[int] = None
     is_continuous_action: Optional[bool] = True
-    acitive_fn: Optional[str] = "tanh"
+    acitive_fn: Optional[str] = "relu"
     online_lr: Optional[float] = 3e-6
     frame_stack: Optional[int] = 1                 
     image_size: Optional[int] = 96                # get from config (img_size)
+    use_trunk: Optional[bool] = True
+    trunk_ln: Optional[bool] = False
+    trunk_activation: Optional[str] = 'relu'
     
 class BaseAgent(nn.Module):
     def __init__(self, cfg: ActorCriticConfig) -> None:

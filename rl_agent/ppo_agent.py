@@ -70,7 +70,7 @@ class PPOAgent2D(BaseAgent):
         self.encoder = ActorCriticEncoder(cfg)
         self.encoder_optim = optim.Adam(self.encoder.parameters(), lr=3e-4)
 
-        self.actor = Actorlog(cfg, self.encoder.repr_dim, use_trunk=True, use_std_share_network=ppo_cfg.use_std_share_network)
+        self.actor = Actorlog(cfg, self.encoder.repr_dim, use_std_share_network=ppo_cfg.use_std_share_network)
         self.actor_optim = optim.Adam(self.actor.parameters(), lr=3e-4)
 
         # set old actor
@@ -81,13 +81,13 @@ class PPOAgent2D(BaseAgent):
 
         if self.adv_compute_mode in ['tradition', 'q-v', 'gae']:
             # use GAE to estimate the advantage
-            self.value = ValueMLP(cfg, self.encoder.repr_dim, use_trunk=True)
+            self.value = ValueMLP(cfg, self.encoder.repr_dim,)
             self.value_optim = optim.Adam(self.value.parameters(), lr=3e-4)
             if self.adv_compute_mode == 'q-v':
-                self.doubleq = DoubleQMLP(cfg, self.encoder.repr_dim, use_trunk=True)
+                self.doubleq = DoubleQMLP(cfg, self.encoder.repr_dim, )
                 self.doubleq_optim = optim.Adam(self.doubleq.parameters(), lr=1e-4)
         elif self.adv_compute_mode in ['iql', 'iql2gae']:
-            self.critic = IQLCritic(cfg, self.encoder.repr_dim, use_trunk=True) 
+            self.critic = IQLCritic(cfg, self.encoder.repr_dim,) 
         else:
             raise NotImplementedError
 
@@ -358,20 +358,20 @@ class PPOAgent(BaseAgent):
 
         self.online_lr = cfg.online_lr
 
-        self.actor = Actorlog(cfg, state_dim, use_trunk=False, use_std_share_network=ppo_cfg.use_std_share_network)
+        self.actor = Actorlog(cfg, state_dim, use_std_share_network=ppo_cfg.use_std_share_network)
         self.actor_optim = optim.Adam(self.actor.parameters(), lr=3e-4)
 
         self.adv_compute_mode = ppo_cfg.adv_compute_mode
 
         if self.adv_compute_mode in ['tradition', 'q-v', 'gae']:
             # use GAE to estimate the advantage
-            self.value = ValueMLP(cfg, state_dim, use_trunk=False)
+            self.value = ValueMLP(cfg, state_dim,)
             self.value_optim = optim.Adam(self.value.parameters(), lr=3e-4)
             if self.adv_compute_mode == 'q-v':
-                self.doubleq = DoubleQMLP(cfg, state_dim, use_trunk=False)
+                self.doubleq = DoubleQMLP(cfg, state_dim, )
                 self.doubleq_optim = optim.Adam(self.doubleq.parameters(), lr=3e-4)
         elif self.adv_compute_mode == 'iql':
-            self.critic = IQLCritic(cfg, state_dim, use_trunk=False) 
+            self.critic = IQLCritic(cfg, state_dim,) 
         else:
             raise NotImplementedError
 

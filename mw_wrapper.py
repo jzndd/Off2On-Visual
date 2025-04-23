@@ -1,4 +1,5 @@
 from __future__ import annotations
+from collections import deque
 from copy import deepcopy
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -10,7 +11,6 @@ import torch
 from torch import Tensor
 import mujoco
 # from .atari_preprocessing import AtariPreprocessing
-import metaworld
 import sys
 import os
 
@@ -29,6 +29,7 @@ def make_mw_env(
     max_episode_steps: Optional[int] = 100,
     frame_skip: int = 2,
     is_sparse_reward: bool = False,
+    frame_stack: int = 1,
 ) -> TorchEnv:
     
     if isinstance(size, ListConfig):
@@ -36,7 +37,8 @@ def make_mw_env(
         size = size[0]
 
     def env_fn():
-        env = MetaWorldEnv(id, frame_skip, device, size, max_episode_steps, is_sparse_reward)
+        env = MetaWorldEnv(id, frame_skip, device, size, max_episode_steps, is_sparse_reward,
+                           frame_stack=frame_stack)
         return env
 
     # TODO: AsyncVectorEnv IN metaworld ?
@@ -52,19 +54,19 @@ class MetaWorldEnv(gymnasium.Env):
 
     def __init__(self, task, frame_skip: int, device="cuda:0", 
                  screen_size=128, max_episode_steps=100,
-                 is_sparse_reward=False):
+                 is_sparse_reward=False, frame_stack=1):
         super(MetaWorldEnv, self).__init__()
 
         # init params
         self.is_sparse_reward = is_sparse_reward
         self.frame_skip = frame_skip
+        self.frame_stack = frame_stack
 
         from metaworld.envs import (
             ALL_V2_ENVIRONMENTS_GOAL_OBSERVABLE,
             ALL_V2_ENVIRONMENTS_GOAL_HIDDEN,
         )
         task = f"{task}-goal-observable"
-
 
         # set env params
         self.env = ALL_V2_ENVIRONMENTS_GOAL_OBSERVABLE[task]()
@@ -100,14 +102,19 @@ class MetaWorldEnv(gymnasium.Env):
         self.screen_size = screen_size  
         
         _low, _high, _obs_dtype = (0, 255, np.uint8)
-        _shape = (screen_size, screen_size, 3)
+        _shape = (screen_size, screen_size, 3 * frame_stack)
         self.observation_space = Box(low=_low, high=_high, shape=_shape, dtype=_obs_dtype)
         self.action_space = Box(low=-1., high=1., shape=(4,), dtype=np.float32)
 
+        # self.obs_buffer = [
+        #     np.empty(_shape, dtype=np.uint8),
+        #     np.empty(_shape, dtype=np.uint8),
+        # ]
         self.obs_buffer = [
             np.empty(_shape, dtype=np.uint8),
-            np.empty(_shape, dtype=np.uint8),
         ]
+
+        self._obs_buffer = deque([], maxlen=frame_stack)
 
         # init
         self.cur_step = 0
@@ -116,7 +123,6 @@ class MetaWorldEnv(gymnasium.Env):
         # cam names: ('topview', 'corner', 'corner2', 'corner3', 'behindGripper', 'gripperPOV')
         img = self.env.render()
         cam_img = np.flipud(img).copy()
-        # print("executing get_rgb")
         return cam_img
 
     def step(self, action: np.array):
@@ -140,23 +146,27 @@ class MetaWorldEnv(gymnasium.Env):
                 self.env.reset()
                 break
 
-            if t == self.frame_skip - 2:
-                # cam_img = self.env.render()
-                # self.obs_buffer[1][i] = np.flipud(cam_img).copy()
-                self.obs_buffer[1] = self.get_rgb()
-            elif t == self.frame_skip - 1:
-                # cam_img = self.env.render()
-                # self.obs_buffer[0][i] = np.flipud(cam_img).copy()
-                self.obs_buffer[0] = self.get_rgb()
+            self.obs_buffer[0] = self.get_rgb()
+
+            # if t == self.frame_skip - 2:
+            #     # cam_img = self.env.render()
+            #     # self.obs_buffer[1][i] = np.flipud(cam_img).copy()
+            #     self.obs_buffer[1] = self.get_rgb()
+            # elif t == self.frame_skip - 1:
+            #     # cam_img = self.env.render()
+            #     # self.obs_buffer[0][i] = np.flipud(cam_img).copy()
+            #     self.obs_buffer[0] = self.get_rgb()
+        obs = self.get_rgb()
+        self._obs_buffer.append(obs)
 
         if self.cur_step >= self.max_episode_steps:
             truncated = 1.0
 
-        obs, original_obs = self._get_obs()
-        info["original_obs"] = original_obs
+        stack_obs = self._get_obs()
+        # info["original_obs"] = original_obs
         # truncated remains False all the time
 
-        return obs, total_reward, terminated, truncated, info
+        return stack_obs, total_reward, terminated, truncated, info
 
     def reset(
         self, *, seed: int | None = None, options: dict[str, Any] | None = None
@@ -167,12 +177,11 @@ class MetaWorldEnv(gymnasium.Env):
 
         state, reset_info = self.env.reset(seed=seed, options=options)
         cam_img = self.get_rgb() # get the first observation
-        self.obs_buffer[0] = cam_img
-        # self.obs_buffer[0][i] = self.env.render()
-        self.obs_buffer[1] = cam_img
 
-        obs, original_obs = self._get_obs()
-        reset_info["original_obs"] = original_obs
+        for _ in range(self.frame_stack):
+            self._obs_buffer.append(cam_img)
+
+        stack_obs = self._get_obs()
         reset_info["success"] = 0
         self.cur_step = 0
         # print("executing metaworld env reset")
@@ -180,7 +189,7 @@ class MetaWorldEnv(gymnasium.Env):
         # obs_dict = {"obs": obs, "state": state}
 
         # return obs_dict, reset_info
-        return obs, reset_info  
+        return stack_obs, reset_info  
 
     def seed(self, seed=None):
         pass
@@ -197,8 +206,8 @@ class MetaWorldEnv(gymnasium.Env):
         # if self.frame_skip > 1:  # more efficient in-place pooling
         #     np.maximum(self.obs_buffer[0], self.obs_buffer[1], out=self.obs_buffer[0])
 
-        original_obs = self.obs_buffer[1]
-        obs = self.obs_buffer[0]
+        # original_obs = self.obs_buffer[1]
+        # obs = self.obs_buffer[0]
 
         # obs = cv2.resize(
         #     original_obs,
@@ -206,7 +215,9 @@ class MetaWorldEnv(gymnasium.Env):
         #     interpolation=cv2.INTER_AREA,
         # )
 
-        return obs, original_obs
+        obs = np.concatenate(list(self._obs_buffer), axis=-1) #  84 * 84 * (3 * frame_stack)
+
+        return obs
 
 class TorchEnv(gymnasium.Wrapper):
     def __init__(self, env: gymnasium.Env, device: torch.device) -> None:
@@ -223,8 +234,9 @@ class TorchEnv(gymnasium.Wrapper):
             self.num_envs = env.observation_space.shape[0]
             b, h, w, c = env.observation_space.shape
 
-        self.num_actions = env.action_space.shape[1] if len(env.action_space.shape) == 2 else env.action_space.shape[0]
+        self.num_actions = env.action_space.shape[1]
         self.observation_space = gymnasium.spaces.Box(low=-1, high=1, shape=(b, c, h, w))
+        self.action_space = gymnasium.spaces.Box(low=-1, high=1, shape=(b, self.num_actions))
 
     def reset(self, *args, **kwargs) -> Tuple[Tensor, Dict[str, Any]]:
         obs, info = self.env.reset(*args, **kwargs)
@@ -261,21 +273,17 @@ class TorchEnv(gymnasium.Wrapper):
 if __name__ == "__main__":
 
     device = torch.device("cuda:1")
-    mw_env = make_mw_env("button-press-topdown-v2", 1, device, 128)
+    mw_env = make_mw_env("button-press-topdown-v2", 1, device, 128, frame_stack=3)
     obs, info = mw_env.reset()
-    # print(info['success'])
-    traj = 0
     while(1):
         action = torch.rand((2, 4))
         obs, rew, end, trunc, loop_info = mw_env.step(action)
-        traj += 1
         if end.any() or trunc.any():
             print("end")
             break
     print("info", loop_info['success'])
     print("end", end)
     print("trunc", trunc)
-    print("traj", traj) 
 
     # print(obs.shape)
     # obs_np = obs[0].add(1).div(2).mul(255).byte().permute(1,2,0).cpu().numpy()

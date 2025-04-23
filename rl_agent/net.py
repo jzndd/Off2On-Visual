@@ -56,14 +56,15 @@ class DoubleQMLP(nn.Module):
     _net: torch.nn.modules.container.Sequential
 
     def __init__(
-        self, cfg: ActorCriticConfig, repr_dim, use_ln: bool = False, use_trunk: bool = True
+        self, cfg: ActorCriticConfig, repr_dim, use_ln: bool = False,
     ) -> None:
         super().__init__()
-        self.use_trunk = use_trunk
+        self.use_trunk = cfg.use_trunk
         if self.use_trunk:
             self.input_layer = nn.Sequential(
                 nn.Linear(repr_dim, cfg.feature_dim),
-                nn.ReLU()
+                nn.LayerNorm(cfg.feature_dim) if cfg.trunk_ln else nn.Identity(),
+                nn.ReLU() if cfg.trunk_activation == 'relu' else nn.Tanh(),
             )
             input_dim = cfg.feature_dim
         else:
@@ -85,14 +86,15 @@ class ValueMLP(nn.Module):
     _net: torch.nn.modules.container.Sequential
 
     def __init__(
-        self, cfg: ActorCriticConfig, repr_dim, use_ln: bool = False, use_trunk: bool = True
+        self, cfg: ActorCriticConfig, repr_dim, use_ln: bool = False,
     ) -> None:
         super().__init__()
-        self.use_trunk = use_trunk
+        self.use_trunk = cfg.use_trunk
         if self.use_trunk:
             self.input_layer = nn.Sequential(
                 nn.Linear(repr_dim, cfg.feature_dim),
-                nn.ReLU()
+                nn.LayerNorm(cfg.feature_dim) if cfg.trunk_ln else nn.Identity(),
+                nn.ReLU() if cfg.trunk_activation == 'relu' else nn.Tanh(),
             )
             input_dim = cfg.feature_dim
         else:
@@ -111,18 +113,14 @@ class ValueMLP(nn.Module):
 class IQLCritic(nn.Module):
     def __init__(
         self,
-        cfg,
+        cfg: ActorCriticConfig,
         repr_dim: int,
-        # state_dim: int,
-        # feature_dim: int,
-        # action_dim: int,
         Q_lr: float = 1e-4,
         target_update_freq: int = 2,
         tau: float = 0.005,
         gamma: float = 0.99,
         v_lr: float = 1e-4,
         omega: float = 0.7,
-        use_trunk: bool = True,
     ) -> None:
         
         super().__init__()
@@ -130,12 +128,11 @@ class IQLCritic(nn.Module):
         self._omega = omega
 
         # init double Q
-        self._Q = DoubleQMLP(cfg, state_dim, use_trunk=use_trunk)
-        self._target_Q = DoubleQMLP(cfg, state_dim, use_trunk=use_trunk)
-        self._target_Q.load_state_dict(self._Q.state_dict())
+        self._Q = DoubleQMLP(cfg, state_dim,)
+        self._target_Q = deepcopy(self._Q)
 
         #for v
-        self._value = ValueMLP(cfg, state_dim, use_trunk=use_trunk)
+        self._value = ValueMLP(cfg, state_dim,)
         self._total_update_step = 0
         self._target_update_freq = target_update_freq
         self._tau = tau
@@ -163,13 +160,6 @@ class IQLCritic(nn.Module):
         return weight * (loss**2)
     
     def update(self, s, a, r, not_done, s_) -> float:
-        
-        #     s, a, r, s_p, not_done = nobs_features, nactions[:, self.n_obs_steps - 1], batch['reward'][:, self.n_obs_steps - 1], next_nobs_features, batch['not_done'][:, self.n_obs_steps - 1]
-        # else:
-        #     s, a, r, s_p, not_done = nobs_features, nactions, batch['reward'], next_nobs_features, batch['not_done']
-        # s, a, r, s_p, _, not_done, _, _ = replay_buffer.sample(self._batch_size)
-        # Compute value loss
-
         with torch.no_grad():
             self._target_Q.eval()
             target_q = self.target_minQ(s, a)
@@ -264,11 +254,10 @@ class EnsembleCritic(nn.Module):
                  repr_dim: int,
                  num_critics: int = 2,
                  layer_norm: bool = True,
-                 edac_init: bool = True,
-                 use_trunk=True) -> None:
+                 edac_init: bool = True,) -> None:
         super().__init__()
 
-        self.use_trunk = use_trunk
+        self.use_trunk = cfg.use_trunk
         self.repr_dim = repr_dim
         self.action_dim = cfg.num_actions
         self.hidden_dim = cfg.hidden_dim
@@ -276,7 +265,8 @@ class EnsembleCritic(nn.Module):
         if self.use_trunk:
             self.input_layer = nn.Sequential(
                 nn.Linear(repr_dim, cfg.feature_dim),
-                nn.ReLU()
+                nn.LayerNorm(cfg.feature_dim) if cfg.trunk_ln else nn.Identity(),
+                nn.ReLU() if cfg.trunk_activation == 'relu' else nn.Tanh(),
             )
             input_dim = cfg.feature_dim
         else:
@@ -368,18 +358,19 @@ class EnsembleCritic(nn.Module):
 # ---------------------------- Actor ---------------------------- #
 
 class VRL3Actor(nn.Module):
-    def __init__(self, cfg: ActorCriticConfig, repr_dim, use_trunk=True) -> None:
+    def __init__(self, cfg: ActorCriticConfig, repr_dim, ) -> None:
         super().__init__()
 
         # default params
         action_dim = cfg.num_actions
         feature_dim = cfg.feature_dim
         hidden_dim = cfg.hidden_dim
-        self.use_trunk = use_trunk
+        self.use_trunk = cfg.use_trunk
 
         if self.use_trunk:
             self.trunk = nn.Sequential(nn.Linear(repr_dim, feature_dim),
-                                    nn.LayerNorm(feature_dim))
+                                    nn.LayerNorm(feature_dim) if cfg.trunk_ln else nn.Identity(),
+                                    nn.ReLU() if cfg.trunk_activation == 'relu' else nn.Tanh())
             input_dim = feature_dim
         else:
             input_dim = repr_dim
@@ -421,13 +412,14 @@ class VRL3Actor(nn.Module):
         return dist, pretanh
     
 class DrQv2Actor(nn.Module):
-    def __init__(self, cfg: ActorCriticConfig, repr_dim, use_trunk=True, use_std_share_network=False) -> None:
+    def __init__(self, cfg: ActorCriticConfig, repr_dim, use_std_share_network=False,) -> None:
         super().__init__()
 
-        self.use_trunk = use_trunk
+        self.use_trunk = cfg.use_trunk
         if self.use_trunk:  
             self.trunk = nn.Sequential(nn.Linear(repr_dim, cfg.feature_dim),
-                                    nn.ReLU())
+                                    nn.LayerNorm(cfg.feature_dim) if cfg.trunk_ln else nn.Identity(),
+                                    nn.ReLU() if cfg.trunk_activation == 'relu' else nn.Tanh(),)
             input_dim = cfg.feature_dim
         else:
             input_dim = repr_dim
@@ -478,13 +470,14 @@ class DrQv2Actor(nn.Module):
         return mean, std
     
 class Actorlog(nn.Module):
-    def __init__(self, cfg: ActorCriticConfig, repr_dim, use_trunk=True, use_std_share_network=False) -> None:
+    def __init__(self, cfg: ActorCriticConfig, repr_dim, use_std_share_network=False,) -> None:
         super().__init__()
 
-        self.use_trunk = use_trunk
+        self.use_trunk = cfg.use_trunk
         if self.use_trunk:  
             self.trunk = nn.Sequential(nn.Linear(repr_dim, cfg.feature_dim),
-                                    nn.ReLU())
+                                    nn.LayerNorm(cfg.feature_dim) if cfg.trunk_ln else nn.Identity(),
+                                    nn.ReLU() if cfg.trunk_activation == 'relu' else nn.Tanh(),)
             input_dim = cfg.feature_dim
         else:
             input_dim = repr_dim
@@ -523,7 +516,7 @@ class Actorlog(nn.Module):
             std = torch.exp(log_std)
         else:
             mean = self.actor_linear(x)
-            if std is not None:
+            if std is None:
                 log_std = self.log_std.expand_as(mean)
                 std = torch.exp(log_std)
             else:
@@ -542,17 +535,17 @@ class ActorCriticEncoder(nn.Module):
         # self.repr_dim = 32 * 57 * 57
         if cfg.img_size == 84:
             # 84 * 84 * 3 input
-            self.repr_dim = cfg.frame_stack * 32 * 35 * 35
+            self.repr_dim = 32 * 35 * 35
         elif cfg.img_size == 96:
             # 96 * 96 * 3 input
-            self.repr_dim = cfg.frame_stack * 32 * 41 * 41
+            self.repr_dim = 32 * 41 * 41
         elif cfg.img_size == 128:
             # 128 * 128 * 3 input
-            self.repr_dim = cfg.frame_stack * 32 * 57 * 57
+            self.repr_dim = 32 * 57 * 57
         else:
             raise ValueError("img_size should be 84, 96 or 128")
 
-        self.convnet = nn.Sequential(nn.Conv2d(3, 32, 3, stride=2),
+        self.convnet = nn.Sequential(nn.Conv2d(3 * cfg.frame_stack, 32, 3, stride=2),
                                      nn.ReLU(), nn.Conv2d(32, 32, 3, stride=1),
                                      nn.ReLU(), nn.Conv2d(32, 32, 3, stride=1),
                                      nn.ReLU(), nn.Conv2d(32, 32, 3, stride=1),

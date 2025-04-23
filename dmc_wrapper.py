@@ -1,3 +1,4 @@
+from collections import deque
 from gymnasium import Env
 from gymnasium.spaces import Box
 import numpy as np
@@ -15,7 +16,7 @@ os.environ["MUJOCO_GL"] = "egl"
 class DMCGymWrapper(Env):
     metadata = {"render_modes": ["rgb_array"], "render_fps": 30}
 
-    def __init__(self, domain, task, seed=42, img_size=84, camera_id=0, frame_skip=2):
+    def __init__(self, domain, task, seed=42, img_size=84, camera_id=0, frame_skip=2, frame_stack=1):
         self._env = suite.load(domain, task, task_kwargs={'random': seed})
         self.frame_skip = frame_skip
         self.seed_value = seed
@@ -24,28 +25,43 @@ class DMCGymWrapper(Env):
         render_kwargs = dict(height=img_size, width=img_size, camera_id=camera_id)
         self._env = pixels.Wrapper(self._env, pixels_only=True, render_kwargs=render_kwargs)
 
-        # Observation and action space
+        # Observation sapce
         obs_spec: specs.Array = self._env.observation_spec()['pixels']
-        self.observation_space = Box(low=0, high=255, shape=obs_spec.shape, dtype=np.uint8)
+        h, w, c = obs_spec.shape
+        c = c * frame_stack
+        self.observation_space = Box(low=0, high=255, shape=(h,w,c), dtype=np.uint8)
 
+        # action space
         act_spec = self._env.action_spec()
-        self.action_space = Box(low=act_spec.minimum, high=act_spec.maximum, dtype=np.float32)
+        self.action_space = Box(low=act_spec.minimum, high=act_spec.maximum, shape=act_spec.shape, dtype=np.float32)
+
+        self.obs_buffer = deque([], maxlen=frame_stack)
 
     def reset(self, seed=None, options=None):
         timestep = self._env.reset()
         obs = timestep.observation['pixels']
-        return obs, {}
+
+        for i in range(self.obs_buffer.maxlen):
+            self.obs_buffer.append(obs)
+
+        stack_obs = np.concatenate(list(self.obs_buffer), axis=-1)
+
+        return stack_obs, {}
 
     def step(self, action):
         total_reward, done = 0.0, False
         for _ in range(self.frame_skip):
             timestep = self._env.step(action)
-            total_reward += timestep.reward or 0.0
+            total_reward += timestep.reward
             done = timestep.last()
             if done:
                 break
         obs = timestep.observation['pixels']
-        return obs, total_reward, done, False, {}
+        self.obs_buffer.append(obs)
+
+        stack_obs = np.concatenate(list(self.obs_buffer), axis=-1)
+
+        return stack_obs, total_reward, done, False, {}
 
     def render(self):
         return self._env.physics.render(height=84, width=84, camera_id=0)
@@ -91,11 +107,12 @@ class TorchEnv(Env):
 
 from gymnasium.vector import SyncVectorEnv
 
-def get_dmc_env(id: str, frame_skip=2, num_envs=1, size=84, device=torch.device("cuda")):
+def get_dmc_env(id: str, frame_skip=2, num_envs=1, size=84, 
+                frame_stack=3, device=torch.device("cuda")):
     domain, task = id.split('_', 1)
 
     def make_env_fn():
-        return DMCGymWrapper(domain, task, frame_skip=frame_skip, img_size=size)
+        return DMCGymWrapper(domain, task, frame_skip=frame_skip, img_size=size, frame_stack=frame_stack)
 
     env_fns = [make_env_fn for _ in range(num_envs)]
     vec_env = SyncVectorEnv(env_fns)
@@ -103,11 +120,11 @@ def get_dmc_env(id: str, frame_skip=2, num_envs=1, size=84, device=torch.device(
     return torch_env
 
 if __name__ == "__main__":
-    env = get_dmc_env("walker_walk")
+    env = get_dmc_env("walker_walk", frame_stack=3)
     obs, info = env.reset()
     print(obs.shape)
     print(obs.max(), obs.min(), obs.mean())
     action = torch.tensor(env.action_space.sample())
-    obs, reward, done,info = env.step(action)
+    obs, reward, done, _, info = env.step(action)
     print(obs.shape, reward, done)
     env.render()

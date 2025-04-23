@@ -5,7 +5,9 @@ defaults:
 
 debug_mode: false
 seed: 0
-task: hammer-v2
+task: disassemble-v2
+
+use_trunk: True          ## can not be modified !!!!!!!!!!!!
 
 is_sparse_reward: True
 is_whole_traj: True
@@ -15,6 +17,7 @@ only_bc: False
 img_size: 96
 
 train_with_bc: True
+frame_stack: 1
 
 hydra:
   run:
@@ -28,12 +31,11 @@ common:
   resume: False # do not modify, set by scripts/resume.sh only.
 
 ac_type: ppo  # Optional[ppo, bc, iql]
-offline_buffer: /data/jzn/workspace/ppo_alg/Off2On-Visual/data/${task}_${img_size}/expert_rb_with_reward.pkl
+offline_buffer: /DATA/disk0/jzn/Off2On-Visual/data/${task}_${img_size}/expert_rb_with_reward.pkl
 expert_rb_dir: ${offline_buffer}
 traj_num: 50
 
-
-bc_ckpt_dir: /data/jzn/workspace/ppo_alg/Off2On-Visual/ckpt/${task}_${ac_type}_2D_${agent.ppo_cfg.adv_compute_mode}/bc_seed${common.seed}_${traj_num}traj.pth
+bc_ckpt_dir: /DATA/disk0/jzn/Off2On-Visual/ckpt/${task}_${ac_type}_2D_${agent.ppo_cfg.adv_compute_mode}/bc_seed${common.seed}_${traj_num}traj.pth
 
 wandb:
   mode: online
@@ -72,7 +74,7 @@ collection:
 # FOR VRL3, try 30000(offline) + 3e6(online)
 training:
   should: True
-  online_max_iter: 2000000 # 3M for VRL3, ppo ; 2e5 for IQL
+  online_max_iter: 2100000 # 1.1M for VRL3, ppo ; 2e5 for IQL
   bc_actor_warmup_steps: 20000    # 2e4, just for PPO
   bc_critic_warmup_steps: 20000   # 2e4, just for PPO
   offline_steps: 50000     # 5w for VRL3, ppo ; 2e5 for IQL

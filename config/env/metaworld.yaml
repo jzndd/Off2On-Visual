@@ -2,9 +2,11 @@ train:
   id: ${task}
   size: ${img_size}
   frame_skip: 2
+  frame_stack: ${frame_stack}
 
 test:
   id: ${task}
   size: ${img_size}
   frame_skip: 2
+  frame_stack: ${frame_stack}
 

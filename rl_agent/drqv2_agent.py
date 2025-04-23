@@ -134,7 +134,7 @@ class IdentityEncoder(nn.Module):
 @dataclass
 class DrQv2Config:
     critic_target_tau: float = 0.01
-    num_expl_steps: int = 4000          # because there are offline steps, so no need to num_expl_steps
+    num_expl_steps: int = 2000          # because there are no offline steps, so need num_expl_steps
     update_every_steps: int = 2
     stddev_clip: float = 0.3
     use_data_aug: bool = True
@@ -142,12 +142,13 @@ class DrQv2Config:
     stage2_update_encoder: bool = True # in this version, we will directly online
     stage2_std: float = 0.1
     stage3_update_encoder: bool = True
-    std0: float = 0.01
-    std1: float = 0.01
-    std_n_decay: int = 500000
+    std0: float = 1.0
+    std1: float = 0.1
+    std_n_decay: int = 100000          # 0.1m
     utd_ratio: float = 1
     mini_batch_size: int = 256
     num_critics: int = 2
+    offline_data_ratio: float = 0.5
 
 # 先验证 Online
 class DrQv2Agent(BaseAgent):
@@ -171,6 +172,7 @@ class DrQv2Agent(BaseAgent):
         self.update_every_steps = drqv2_cfg.update_every_steps
         self.num_expl_steps = drqv2_cfg.num_expl_steps
         self.utd_ratio = drqv2_cfg.utd_ratio
+        self.offline_data_ratio = drqv2_cfg.offline_data_ratio
         self.mini_batch_size = drqv2_cfg.mini_batch_size
 
         self.stage2_std = drqv2_cfg.stage2_std
@@ -194,7 +196,8 @@ class DrQv2Agent(BaseAgent):
         downstream_input_dim = self.encoder.repr_dim
 
         self.actor = DrQv2Actor(cfg, downstream_input_dim).to(self.device)
-        self.critic: EnsembleCritic = EnsembleCritic(cfg, downstream_input_dim, num_critics=drqv2_cfg.num_critics).to(self.device)
+        self.critic: EnsembleCritic = EnsembleCritic(cfg, downstream_input_dim, 
+                                                     num_critics=drqv2_cfg.num_critics).to(self.device)
         self.critic_target = copy.deepcopy(self.critic).to(self.device).requires_grad_(False)
 
         # optimizers
@@ -241,7 +244,7 @@ class DrQv2Agent(BaseAgent):
     def bc_transfer_ac(self):
         self.stage = 3
 
-    def update(self, rb, step, expertrb = None):
+    def update(self, rb, step, expertrb):
         # for stage 2 and 3, we use the same functions but with different hyperparameters
         assert self.stage in (2, 3)
 
@@ -250,12 +253,13 @@ class DrQv2Agent(BaseAgent):
         if self.stage == 3 and step <= self.num_expl_steps:
             return metrics
 
-        if expertrb is not None:
-            collect_batch = rb.sample(mini_batch_size=self.mini_batch_size * self.utd_ratio // 2)
-            expert_batch = expertrb.sample(mini_batch_size=self.mini_batch_size * self.utd_ratio // 2)
+        if self.offline_data_ratio > 0:
+            collect_batch = rb.sample(mini_batch_size=self.mini_batch_size * self.utd_ratio * (1-self.offline_data_ratio))
+            expert_batch = expertrb.sample(mini_batch_size=self.mini_batch_size * self.utd_ratio * self.offline_data_ratio)
             batch = merge_batches(collect_batch, expert_batch)
         else:
-            batch = rb.sample(mini_batch_size=self.mini_batch_size * self.utd_ratio)
+            self.utd_ratio = 1
+            batch = rb.sample(mini_batch_size=self.mini_batch_size)
 
         # if self.stage == 2:
         obss, actions, rewards, dones, _, next_obss  = utils.to_torch(batch, device=self.device)
@@ -272,10 +276,6 @@ class DrQv2Agent(BaseAgent):
                 return metrics
             update_encoder = self.stage3_update_encoder
             stddev = utils.schedule(self.stddev_schedule, step)
-
-            # conservative_loss_weight = 0
-
-            # # compute stage 3 BC weight
 
         # augment
         if self.use_data_aug:
@@ -320,7 +320,6 @@ class DrQv2Agent(BaseAgent):
 
         # update critic target networks
         update_exponential_moving_average(self.critic, self.critic_target, self.critic_target_tau)
-        # utils.soft_update_params(self.critic, self.critic_target, self.critic_target_tau)
         return metrics
 
     def update_critic_drqv2(self, obs, action, reward, dones, next_obs, stddev, update_encoder):

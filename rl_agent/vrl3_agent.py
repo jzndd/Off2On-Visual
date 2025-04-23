@@ -155,7 +155,7 @@ class VRL3Config:
     stage3_bc_lam1: float = 0.95
 
 class VRL3Agent(BaseAgent):
-    def __init__(self, cfg, vrl3_cfg: VRL3Config = None):
+    def __init__(self, cfg: ActorCriticConfig, vrl3_cfg: VRL3Config = None):
         
         super().__init__(cfg)
 
@@ -164,7 +164,7 @@ class VRL3Agent(BaseAgent):
             vrl3_cfg = VRL3Config()
         
         # ------------------------- set default values ------------------------
-        action_dim = 4
+        action_dim = cfg.num_actions
         lr=1e-4
         self.ac_type = "vrl3"
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -238,7 +238,7 @@ class VRL3Agent(BaseAgent):
         if force_action_std == None:
             stddev = utils.schedule(self.stddev_schedule, step)
             if step < self.num_expl_steps and not eval_mode:
-                action = np.random.uniform(0, 1, (self.act_dim,)).astype(np.float32)
+                action = np.random.uniform(-1, 1, (self.act_dim,)).astype(np.float32)
                 return action
         else:
             stddev = force_action_std

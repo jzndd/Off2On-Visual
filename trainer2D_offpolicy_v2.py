@@ -1,3 +1,4 @@
+from collections import deque
 import os
 from pathlib import Path
 import random
@@ -5,7 +6,7 @@ from typing import List, Tuple, Union
 
 import cv2
 # from mw_wrapper import make_mw_env
-from dmc_wrapper import get_dmc_env
+# from dmc_wrapper import get_dmc_env
 # from dmc_wrapper_state import get_d4rl_env
 import torch
 from omegaconf import DictConfig, OmegaConf
@@ -53,9 +54,11 @@ class Trainer:
         #     self.registered_env_func = get_d4rl_env
         #     self.domain_name = 'dmc'
         if cfg.task != "walker_walk":
+            from mw_wrapper import make_mw_env
             self.registered_env_func = make_mw_env
             self.domain_name = 'metaworld'
         else:
+            from dmc_wrapper import get_dmc_env
             self.registered_env_func = get_dmc_env
             self.domain_name = 'dmc'
 
@@ -66,7 +69,7 @@ class Trainer:
         # self.test_env = self.registered_env_func(num_envs=1, device=self._device, **cfg.env.test)
         # obs, info = self.test_env.reset()
         # init agent
-        self.agent: DrQv2Agent = DrQv2Agent(cfg.agent.actor_critic_cfg, )
+        self.agent: DrQv2Agent = DrQv2Agent(cfg.agent.actor_critic_cfg, cfg.agent.drqv2_cfg)
         self.agent.to(self._device)
         self.agent.setup_training(cfg.actor_critic.actor_critic_loss)
 
@@ -97,8 +100,14 @@ class Trainer:
                     self._cfg.expert_rb_dir = self._cfg.expert_rb_dir.replace("reward", "reward_sparse")
                 if self._cfg.is_whole_traj:
                     self._cfg.expert_rb_dir = self._cfg.expert_rb_dir.replace(".pkl", "_whole_traj_50traj.pkl")
+
+            elif self.domain_name == 'dmc':
+                if self._cfg.frame_stack > 1:
+                    self._cfg.expert_rb_dir = self._cfg.expert_rb_dir.replace(".pkl", f"_stack{self._cfg.frame_stack}.pkl")
             
-            expertrb = OfflineReplaybuffer(1000000, train_env.observation_space.shape[1:], (train_env.action_space.shape[1],))
+            expertrb = OfflineReplaybuffer(1000000, train_env.observation_space.shape[1:], 
+                                           (train_env.action_space.shape[1],),
+                                           frame_stack=self._cfg.frame_stack)
             expertrb.load(self._cfg.expert_rb_dir)
 
         # First stage: BC
@@ -131,9 +140,12 @@ class Trainer:
         self.agent.bc_transfer_ac()
 
         # use RLPD, a empty buffer
-        rb = OfflineReplaybuffer(1000000, train_env.observation_space.shape[1:], (train_env.action_space.shape[1],))
+        rb = OfflineReplaybuffer(1000000, train_env.observation_space.shape[1:], 
+                                 (train_env.action_space.shape[1],),
+                                 frame_stack=self._cfg.frame_stack)
         # rb = expertrb
 
+        # obs_buffer = deque([], maxlen=cfg.frame_stack)
         if self._cfg.only_bc:
             exit(1) 
 
@@ -141,6 +153,7 @@ class Trainer:
 
             # -----------------------------   2-stage params update   -----------------------------
             obs, _ = train_env.reset()
+
             done = False
             eps_rew = 0
             step = 0
@@ -162,13 +175,10 @@ class Trainer:
                     else:
                         real_act = real_act_tuple
                         old_log_prob = None
-                    # try:
-                    next_obs, rew, terminated, trunc, info = train_env.step(real_act)
-                    # except:
-                    #     import pdb
-                    #     pdb.set_trace()
 
-                    if self._cfg.is_sparse_reward:
+                    next_obs, rew, terminated, trunc, info = train_env.step(real_act)
+
+                    if self.domain_name == "metaworld" and self._cfg.is_sparse_reward:
                         rew = torch.tensor(info['success'], device=self._device, dtype=torch.float32)
 
                     step += 1
@@ -201,11 +211,12 @@ class Trainer:
                 # if rb.size >= :
                     # print(" ---------------------- begin update {} ------------------".format(self.iter))
                 # always train
-                metrics = self.agent.update(rb, self.iter)
-                _to_log = []
-                _to_log.append(metrics)
-                _to_log = [{f"actor_critic/train/{k}": v for k, v in d.items()} for d in _to_log]
-                to_log += _to_log
+                if self.iter >= 4000:
+                    metrics = self.agent.update(rb, self.iter, expertrb)
+                    _to_log = []
+                    _to_log.append(metrics)
+                    _to_log = [{f"actor_critic/train/{k}": v for k, v in d.items()} for d in _to_log]
+                    to_log += _to_log
 
                 # ------------------------------------ should test ? ---------------------------------
 
@@ -216,7 +227,7 @@ class Trainer:
 
                 # ------------------------------------ wandb log ---------------------------------
 
-                wandb_log(to_log, self.iter + cfg.training.offline_steps)
+                wandb_log(to_log, self.iter)
                 to_log = []
 
             print("this traj eps rew is {}, and the traj len is {}".format(eps_rew, step))
