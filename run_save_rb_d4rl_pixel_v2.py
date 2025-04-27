@@ -8,9 +8,9 @@ import torch
 import pickle
 import h5py
 
-from rl_agent.utils import OfflineReplaybuffer
+from rl_agent.utils import EfficientReplayBuffer
 
-def store_d4rl_dataset(env_name: str, buffer: OfflineReplaybuffer, file_save_path: str):
+def store_d4rl_dataset(env_name: str, buffer: EfficientReplayBuffer, file_save_path: str):
     """
     Loads transitions from a D4RL dataset and stores them into an OfflineReplaybuffer.
 
@@ -32,6 +32,7 @@ def store_d4rl_dataset(env_name: str, buffer: OfflineReplaybuffer, file_save_pat
         # next_observations = dataset["next_observation"]
         actions = dataset["action"]
         rewards = dataset["reward"]
+        discounts = dataset["discount"]
         step_type = dataset["step_type"] # 0 is begin, 1 is mid, 2 is end
         # terminals = dataset["terminal"]
 
@@ -39,22 +40,27 @@ def store_d4rl_dataset(env_name: str, buffer: OfflineReplaybuffer, file_save_pat
             if step_type[i] == 0:
                 for _ in range(buffer.frame_stack):
                     obs_buffer.append(observations[i])  # 84 * 84 * 3
-                done = 0.
+                rew = rewards[i]
+                act = actions[i]
+                stack_obs = np.concatenate(list(obs_buffer), axis=0) 
+                dis = discounts[i]
+                buffer.store(stack_obs, act, rew, dis, True)
                 continue
-            elif step_type[i] == 1:
-                done = 0.
-            else:
-                done = 1.
+            # elif step_type[i] == 1:
+            #     done = 0.
+            # else:
+            #     done = 1.
             # obs = observations[i -1]
-            stack_obs = np.concatenate(list(obs_buffer), axis=0) #  (3 * frame_stack) * 84 * 84
-            act = actions[i]
+            # stack_obs = np.concatenate(list(obs_buffer), axis=0) #  (3 * frame_stack) * 84 * 84
 
             obs_buffer.append(observations[i]) 
-            stack_next_obs = np.concatenate(list(obs_buffer), axis=0) #  (3 * frame_stack) * 84 * 84
+            stack_obs = np.concatenate(list(obs_buffer), axis=0) #  (3 * frame_stack) * 84 * 84
             # next_obs = observations[i]
             rew = rewards[i]
+            act = actions[i]
+            dis = discounts[i]
             # done = terminals[i]
-            buffer.store(stack_obs, act, stack_next_obs, rew, done)
+            buffer.store(stack_obs, act, rew, dis, False)
 
         lenghth += len(observations)
 
@@ -65,9 +71,12 @@ def store_d4rl_dataset(env_name: str, buffer: OfflineReplaybuffer, file_save_pat
 
     print(f"Stored {buffer.size} transitions in the buffer.")
 
-    save_name = "expert_rb_with_reward.npz"
+    save_name = "efficient_rb_with_reward.pkl"
     if frame_stack > 1:
-        save_name = f"expert_rb_with_reward_stack{frame_stack}.npz"
+        save_name = f"efficient_rb_with_reward_stack{frame_stack}.pkl"
+
+    batch = buffer.sample(256)
+    import pdb; pdb.set_trace()
 
     buffer.save(f"{file_save_path}/{save_name}")
     # file_save_path
@@ -78,7 +87,7 @@ env_name = "walker_walk"  # Change this to your desired D4RL environment
 file_save_path = f"data/{env_name}_84"
 import os
 os.makedirs(file_save_path, exist_ok=True)
-buffer = OfflineReplaybuffer(capacity=300000, action_shape=(6,), frame_stack=frame_stack)  # Update obs_shape and act_dim as needed
+buffer = EfficientReplayBuffer(capacity=300000, obs_shape=(9,84,84), act_shape=(6,), frame_stack=frame_stack)  # Update obs_shape and act_dim as needed
 store_d4rl_dataset(env_name, buffer, file_save_path=file_save_path)
 
 # env= gym.make("halfcheetah-medium-v2")

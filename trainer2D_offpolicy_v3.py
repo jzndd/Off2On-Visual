@@ -13,7 +13,7 @@ from omegaconf import DictConfig, OmegaConf
 from rl_agent import PPOAgent2D, VRL3Agent, DrQv2Agent
 import wandb
 import numpy as np
-from rl_agent.utils import OfflineReplaybuffer, OnlineReplayBuffer
+from rl_agent.utils import EfficientReplayBuffer 
 
 from utils import VideoRecorder, wandb_log, Normalization, to_np
 import sys
@@ -105,7 +105,7 @@ class Trainer:
                 if self._cfg.frame_stack > 1:
                     self._cfg.expert_rb_dir = self._cfg.expert_rb_dir.replace(".pkl", f"_stack{self._cfg.frame_stack}.pkl")
             
-            expertrb = OfflineReplaybuffer(1000000, train_env.observation_space.shape[1:], 
+            expertrb = EfficientReplayBuffer(1000000, train_env.observation_space.shape[1:], 
                                            (train_env.action_space.shape[1],),
                                            frame_stack=self._cfg.frame_stack)
             expertrb.load(self._cfg.expert_rb_dir)
@@ -124,7 +124,7 @@ class Trainer:
             else:
                 for i in range(cfg.training.offline_steps):
                     metrics = self.agent.update(None, i, expertrb)
-                    if (i+1) % 5000 == 0:
+                    if (i+1) % 500 == 0:
                         print(f"bc_actor_warmup_steps: {i}")
                         to_log = self.test_actor_critic(eval_times=10)
 
@@ -143,7 +143,7 @@ class Trainer:
         self.agent.bc_transfer_ac()
 
         # use RLPD, a empty buffer
-        rb = OfflineReplaybuffer(1000000, train_env.observation_space.shape[1:], 
+        rb = EfficientReplayBuffer(1000000, train_env.observation_space.shape[1:], 
                                  (train_env.action_space.shape[1],),
                                  frame_stack=self._cfg.frame_stack)
         
@@ -158,6 +158,7 @@ class Trainer:
 
             # -----------------------------   2-stage params update   -----------------------------
             obs, _ = train_env.reset()
+            rb.store(obs.detach().cpu().numpy(), None, None, None, True)
 
             done = False
             eps_rew = 0
@@ -165,7 +166,7 @@ class Trainer:
 
             # 2 stage : ac update
             # end_traj_flag = False
-            # while not done:
+            # while not done:           
             while not done:
                 self.iter += 1
                 with torch.no_grad():
@@ -181,7 +182,7 @@ class Trainer:
                         real_act = real_act_tuple
                         old_log_prob = None
 
-                    next_obs, rew, terminated, trunc, info = train_env.step(real_act)
+                    obs, rew, terminated, trunc, info = train_env.step(real_act)
 
                     if self.domain_name == "metaworld" and self._cfg.is_sparse_reward:
                         rew = torch.tensor(info['success'], device=self._device, dtype=torch.float32)
@@ -206,10 +207,13 @@ class Trainer:
 
                     # rb.store(obs, next_obs, rew, done, real_act, old_log_prob=old_log_prob, 
                     #         state_value=state_value, dw=dw)
-                    rb.store(obs.detach().cpu().numpy(), real_act.detach().cpu().numpy(), next_obs.detach().cpu().numpy(), 
-                             rew.detach().cpu().numpy(), done.detach().cpu().numpy())
-                    
-                    obs = next_obs
+                    # rb.store(obs.detach().cpu().numpy(), real_act.detach().cpu().numpy(), next_obs.detach().cpu().numpy(), 
+                    #          rew.detach().cpu().numpy(), done.detach().cpu().numpy())
+                    discount = 1 - done
+                    # obs = next_obs
+
+                    rb.store(obs.detach().cpu().numpy(), real_act.detach().cpu().numpy(),
+                             rew.detach().cpu().numpy(), discount.detach().cpu().numpy(), False)
 
                 # ------------------------------------ should train ? ---------------------------------
                 

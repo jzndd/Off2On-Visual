@@ -300,6 +300,8 @@ class OfflineReplaybuffer:
 
         self.returns = None
 
+        print("Createing a buffer with capacity: ", capacity)
+
     def store(self, obs, act, next_obs, rew, done):
         """
         Stores a transition in the buffer.
@@ -353,14 +355,20 @@ class OfflineReplaybuffer:
         indices = np.random.choice(self.size - 1, int(mini_batch_size), replace=False)
 
         # Convert numpy arrays to torch tensors
-        obs_batch = torch.tensor(self.obs[indices], dtype=torch.float32)
-        next_obs_batch = torch.tensor(self.obs_[indices], dtype=torch.float32)
-        act_batch = torch.tensor(self.act[indices], dtype=torch.float32)
-        rew_batch = torch.tensor(self.rew[indices], dtype=torch.float32)
-        done_batch = torch.tensor(self.done[indices], dtype=torch.float32)
+        # obs_batch = torch.tensor(self.obs[indices], dtype=torch.float32)
+        # next_obs_batch = torch.tensor(self.obs_[indices], dtype=torch.float32)
+        # act_batch = torch.tensor(self.act[indices], dtype=torch.float32)
+        # rew_batch = torch.tensor(self.rew[indices], dtype=torch.float32)
+        # done_batch = torch.tensor(self.done[indices], dtype=torch.float32)
+        obs_batch = torch.from_numpy(self.obs[indices]).float()
+        next_obs_batch = torch.from_numpy(self.obs_[indices]).float()
+        act_batch = torch.from_numpy(self.act[indices]).float()
+        rew_batch = torch.from_numpy(self.rew[indices]).float()
+        done_batch = torch.from_numpy(self.done[indices]).float()
 
         if self.returns is not None:
-            returns_batch = torch.tensor(self.returns[indices], dtype=torch.float32)
+            # returns_batch = torch.tensor(self.returns[indices], dtype=torch.float32)
+            returns_batch = torch.from_numpy(self.returns[indices]).float()
             return obs_batch, act_batch, rew_batch, done_batch, returns_batch, next_obs_batch
         else:
             return obs_batch, act_batch, rew_batch, done_batch, None, next_obs_batch
@@ -385,6 +393,14 @@ class OfflineReplaybuffer:
         self.size = 0
 
     def save(self, filepath):
+
+        # np.savez_compressed(filepath, 
+        #                     obs=self.obs[:self.size],
+        #                     next_obs=self.obs_[:self.size],
+        #                     act=self.act[:self.size],
+        #                     rew=self.rew[:self.size],
+        #                     done=self.done[:self.size])
+        # print(f"Buffer saved to {filepath}.npz")
         """
         Saves the replay buffer to a file using pickle, saving only valid data.
 
@@ -420,6 +436,18 @@ class OfflineReplaybuffer:
             self.size = len(data['obs'])
             self.ptr = self.size
         print(f"Buffer loaded from {filepath}")
+
+        # data = np.load(filepath)
+        # N = len(data['obs'])
+        # self.obs[:N] = data['obs']
+        # self.obs_[:N] = data['next_obs']
+        # self.rew[:N] = data['rew']
+        # self.done[:N] = data['done']
+        # self.act[:N] = data['act']
+        # self.ptr = N
+        # self.size = N
+        # print(f"Buffer loaded from {filepath}")
+
         # except: 
         #     raise FileNotFoundError(f" {filepath} not found. Please check the file path.")
 
@@ -463,6 +491,183 @@ def merge_batches(batch1, batch2):
         else:
             merged.append(torch.cat([b1, b2], dim=0))
     return tuple(merged)
+
+class EfficientReplayBuffer:
+    '''Fast + efficient replay buffer implementation in numpy.'''
+
+    def __init__(self, capacity, obs_shape, act_shape, frame_stack=1, nstep=1, discount=0.99,
+                 data_specs=None, sarsa=False):
+        self.buffer_size = capacity
+        self.data_dict = {}
+        self.size = 0
+        self.traj_index = 0
+        self.frame_stack = frame_stack
+        self._recorded_frames = frame_stack + 1
+        self.nstep = nstep
+        self.discount = discount
+        self.full = False
+        self.discount_vec = np.power(discount, np.arange(nstep))  # n_step - first dim should broadcast
+        self.next_dis = discount ** nstep
+        self.sarsa = sarsa
+
+        self.obs_shape = obs_shape
+        self.ims_channels = obs_shape[0] // self.frame_stack
+        self.act_shape = act_shape
+
+        self.obs = np.zeros([self.buffer_size, self.ims_channels, *self.obs_shape[1:]], dtype=np.uint8)
+        self.act = np.zeros([self.buffer_size, *self.act_shape], dtype=np.float32)
+        self.rew = np.zeros([self.buffer_size], dtype=np.float32)
+        self.dis = np.zeros([self.buffer_size], dtype=np.float32)
+        self.valid = np.zeros([self.buffer_size], dtype=np.bool_)
+
+    def _initial_setup(self, obs, act):
+        self.size = 0
+
+    def add_data_point(self, obs, act, rew, dis, first):
+        # first = time_step.first()
+        # latest_obs = time_step.observation[-self.ims_channels:]
+        latest_obs = obs[-self.ims_channels:]
+        if first:
+            end_index = self.size + self.frame_stack
+            end_invalid = end_index + self.frame_stack + 1
+            if end_invalid > self.buffer_size:
+                if end_index > self.buffer_size:
+                    end_index = end_index % self.buffer_size
+                    self.obs[self.size:self.buffer_size] = latest_obs
+                    self.obs[0:end_index] = latest_obs
+                    self.full = True
+                else:
+                    self.obs[self.size:end_index] = latest_obs
+                end_invalid = end_invalid % self.buffer_size
+                self.valid[self.size:self.buffer_size] = False
+                self.valid[0:end_invalid] = False
+            else:
+                self.obs[self.size:end_index] = latest_obs
+                self.valid[self.size:end_invalid] = False
+            self.size = end_index
+            self.traj_index = 1
+        else:
+            np.copyto(self.obs[self.size], latest_obs)  # Check most recent image
+            np.copyto(self.act[self.size], act)
+            self.rew[self.size] = rew
+            self.dis[self.size] = dis
+            self.valid[(self.size + self.frame_stack) % self.buffer_size] = False
+            if self.traj_index >= self.nstep:
+                self.valid[(self.size - self.nstep + 1) % self.buffer_size] = True
+            self.size += 1
+            self.traj_index += 1
+            if self.size == self.buffer_size:
+                self.size = 0
+                self.full = True
+
+    def store(self, obs, act, rew, dis, first):
+        # buffer 中存入 int 数据
+        if obs.max() < 1.1:
+            obs = ((obs + 1) / 2 * 255).astype(np.uint8)
+
+        if first:
+            self.add_data_point(obs[0], act, rew, dis, first)
+
+        else:
+            for i in range(obs.shape[0]):
+                self.add_data_point(obs[i], act[i], rew[i], dis[i], first)
+
+    # def __next__(self, ):
+    def sample(self, mini_batch_size):
+        indices = np.random.choice(self.valid.nonzero()[0], size=int(mini_batch_size))
+        return self.gather_nstep_indices(indices)
+
+    def gather_nstep_indices(self, indices):
+        n_samples = indices.shape[0]
+        all_gather_ranges = np.stack([np.arange(indices[i] - self.frame_stack, indices[i] + self.nstep)
+                                      for i in range(n_samples)], axis=0) % self.buffer_size
+        gather_ranges = all_gather_ranges[:, self.frame_stack:]  # bs x nstep
+        obs_gather_ranges = all_gather_ranges[:, :self.frame_stack]
+        nobs_gather_ranges = all_gather_ranges[:, -self.frame_stack:]
+
+        all_rewards = self.rew[gather_ranges]
+
+        # Could implement below operation as a matmul in pytorch for marginal additional speed improvement
+        rew = np.sum(all_rewards * self.discount_vec, axis=1, keepdims=True)
+
+        obs = np.reshape(self.obs[obs_gather_ranges], [n_samples, *self.obs_shape])
+        nobs = np.reshape(self.obs[nobs_gather_ranges], [n_samples, *self.obs_shape])
+
+        assert obs.shape[2] == obs.shape[3], f"obs shape {obs.shape[3]} != {obs.shape[4]}"
+
+        act = self.act[indices]
+
+        dis = np.expand_dims(self.next_dis * self.dis[nobs_gather_ranges[:, -1]], axis=-1)
+
+        obs = torch.from_numpy((obs / 255.0) * 2 - 1).float()
+        nobs = torch.from_numpy((nobs / 255.0) * 2 - 1).float()
+        act = torch.from_numpy(act).float()
+        rew = torch.from_numpy(rew).float()
+        dis = torch.from_numpy(dis).float()
+
+        if self.sarsa:
+            nact = self.act[indices + self.nstep]
+            return (obs, act, rew, dis, nobs, nact)
+
+        return (obs, act, rew, dis, nobs)
+
+    def __len__(self):
+        if self.full:
+            return self.buffer_size
+        else:
+            return self.size
+
+    def get_train_and_val_indices(self, validation_percentage):
+        all_indices = self.valid.nonzero()[0]
+        num_indices = all_indices.shape[0]
+        num_val = int(num_indices * validation_percentage)
+        np.random.shuffle(all_indices)
+        val_indices, train_indices = np.split(all_indices,
+                                              [num_val])
+        return train_indices, val_indices
+
+    def get_obs_act_batch(self, indices):
+        n_samples = indices.shape[0]
+        obs_gather_ranges = np.stack([np.arange(indices[i] - self.frame_stack, indices[i])
+                                      for i in range(n_samples)], axis=0) % self.buffer_size
+        obs = np.reshape(self.obs[obs_gather_ranges], [n_samples, *self.obs_shape])
+        act = self.act[indices]
+        return obs, act
+    
+    def save(self, filepath):
+        """
+        Saves the replay buffer to a file using pickle, saving only valid data.
+
+        Args:
+            filepath (str): Path to save the buffer.
+        """
+        with open(filepath, 'wb') as f:
+            pickle.dump({
+                'obs': self.obs[:self.size],  # Only save the valid part
+                'rew': self.rew[:self.size],
+                'dis': self.dis[:self.size],
+                'act': self.act[:self.size],
+                'valid': self.valid[:self.size],
+            }, f)
+        print(f"Buffer saved to {filepath}")
+    
+    def load(self, filepath):
+        """
+        Loads the replay buffer from a file using pickle.
+
+        Args:
+            filepath (str): Path to load the buffer from.
+        """
+        with open(filepath, 'rb') as f:
+            data = pickle.load(f)
+            assert len(data['obs']) == len(data['rew']) == len(data['dis']) == len(data['act'])
+            self.obs[:len(data['obs'])] = data['obs']
+            self.rew[:len(data['rew'])] = data['rew']
+            self.dis[:len(data['dis'])] = data['dis']
+            self.act[:len(data['act'])] = data['act']
+            self.valid[:len(data['valid'])] = data['valid']
+            self.size = len(data['obs'])
+        print(f"Buffer loaded from {filepath}")
 
 # test
 if __name__ == "__main__":

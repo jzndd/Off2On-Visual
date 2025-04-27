@@ -19,6 +19,8 @@ img_size: 96
 train_with_bc: True
 frame_stack: 1
 
+train_with_offline_data_mode: ${ac_type}       # rlpd is sepearate 2 buffer, vrl3 is use 1 buffer, drqv2 is not use, and drqv2offline is only use offliendata
+
 hydra:
   run:
     dir: outputs/${now:%Y.%m.%d}/${now:%H%M%S}_${task}_${wandb.group}_${wandb.name}
@@ -31,11 +33,11 @@ common:
   resume: False # do not modify, set by scripts/resume.sh only.
 
 ac_type: ppo  # Optional[ppo, bc, iql]
-offline_buffer: /DATA/disk0/jzn/Off2On-Visual/data/${task}_${img_size}/expert_rb_with_reward.pkl
+offline_buffer: /data/jzn/workspace/ppo_alg/Off2On-Visual/data/${task}_${img_size}/efficient_rb_with_reward.pkl
 expert_rb_dir: ${offline_buffer}
 traj_num: 50
 
-bc_ckpt_dir: /DATA/disk0/jzn/Off2On-Visual/ckpt/${task}_${ac_type}_2D_${agent.ppo_cfg.adv_compute_mode}/bc_seed${common.seed}_${traj_num}traj.pth
+bc_ckpt_dir: /data/jzn/workspace/ppo_alg/Off2On-Visual/ckpt/${task}_${ac_type}_2D_${agent.ppo_cfg.adv_compute_mode}/bc_seed${common.seed}_${traj_num}traj.pth
 
 wandb:
   mode: online

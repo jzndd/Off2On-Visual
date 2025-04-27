@@ -253,7 +253,6 @@ class EnsembleCritic(nn.Module):
                  cfg: ActorCriticConfig,
                  repr_dim: int,
                  num_critics: int = 2,
-                 layer_norm: bool = True,
                  edac_init: bool = True,) -> None:
         super().__init__()
 
@@ -261,6 +260,8 @@ class EnsembleCritic(nn.Module):
         self.repr_dim = repr_dim
         self.action_dim = cfg.num_actions
         self.hidden_dim = cfg.hidden_dim
+
+        layer_norm = cfg.critic_ln
 
         if self.use_trunk:
             self.input_layer = nn.Sequential(
@@ -272,7 +273,6 @@ class EnsembleCritic(nn.Module):
         else:
             input_dim = repr_dim
 
-        #block = nn.LayerNorm(hidden_dim) if layer_norm else nn.Identity()
         self.num_critics = num_critics
 
         self.critic = nn.Sequential(
@@ -431,8 +431,8 @@ class DrQv2Actor(nn.Module):
             self.actor_linear = MLP(input_dim, cfg.hidden_dim, cfg.depth, cfg.num_actions, activation=cfg.acitive_fn, final_activation=None, last_gain=0.01)
             self.log_std = nn.Parameter(torch.zeros(1, cfg.num_actions))
 
-    def get_action(self, x: Tensor, eval_mode=False) -> Tensor:
-        mean, std = self.forward(x)
+    def get_action(self, x: Tensor, std=None, eval_mode=False) -> Tensor:
+        mean, std = self.forward(x, std)
         if eval_mode:
             action: Tensor = mean
             action = action.clamp(-1, 1)
@@ -458,7 +458,7 @@ class DrQv2Actor(nn.Module):
             std = torch.exp(log_std)
         else:
             mean = self.actor_linear(x)
-            if std is not None:
+            if std is None:
                 log_std = self.log_std.expand_as(mean)
                 std = torch.exp(log_std)
             else:

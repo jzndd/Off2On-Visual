@@ -42,6 +42,7 @@ class ActorCriticConfig:
     use_trunk: Optional[bool] = True
     trunk_ln: Optional[bool] = False
     trunk_activation: Optional[str] = 'relu'
+    critic_ln: Optional[bool] = False
     
 class BaseAgent(nn.Module):
     def __init__(self, cfg: ActorCriticConfig) -> None:

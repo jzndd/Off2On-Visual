@@ -149,6 +149,7 @@ class DrQv2Config:
     mini_batch_size: int = 256
     num_critics: int = 2
     offline_data_ratio: float = 0.5
+    bc_weight: float = 0.0  
 
 # 先验证 Online
 class DrQv2Agent(BaseAgent):
@@ -177,6 +178,8 @@ class DrQv2Agent(BaseAgent):
 
         self.stage2_std = drqv2_cfg.stage2_std
         self.stage2_update_encoder = drqv2_cfg.stage2_update_encoder
+
+        self.bc_weight = drqv2_cfg.bc_weight
 
         if drqv2_cfg.std1 > drqv2_cfg.std0:
             drqv2_cfg.std1 = drqv2_cfg.std0
@@ -247,24 +250,37 @@ class DrQv2Agent(BaseAgent):
     def update(self, rb, step, expertrb):
         # for stage 2 and 3, we use the same functions but with different hyperparameters
         assert self.stage in (2, 3)
-
         metrics = dict()
 
-        if self.stage == 3 and step <= self.num_expl_steps:
-            return metrics
+        if self.stage == 2:
+            bc_weight = self.bc_weight
+            utd_ratio = 1
+            batch = expertrb.sample(mini_batch_size=self.mini_batch_size)
 
-        if self.offline_data_ratio > 0:
-            collect_batch = rb.sample(mini_batch_size=self.mini_batch_size * self.utd_ratio * (1-self.offline_data_ratio))
-            expert_batch = expertrb.sample(mini_batch_size=self.mini_batch_size * self.utd_ratio * self.offline_data_ratio)
-            batch = merge_batches(collect_batch, expert_batch)
-        else:
-            self.utd_ratio = 1
-            batch = rb.sample(mini_batch_size=self.mini_batch_size)
+        elif self.stage == 3:
+            bc_weight = 0
+            if step <= self.num_expl_steps:
+                return metrics
+
+            if self.offline_data_ratio > 0:
+                utd_ratio = self.utd_ratio
+                collect_batch = rb.sample(mini_batch_size=self.mini_batch_size * self.utd_ratio * (1-self.offline_data_ratio))
+                expert_batch = expertrb.sample(mini_batch_size=self.mini_batch_size * self.utd_ratio * self.offline_data_ratio)
+                batch = merge_batches(collect_batch, expert_batch)
+            else:
+                utd_ratio = 1
+                batch = rb.sample(mini_batch_size=self.mini_batch_size)
 
         # if self.stage == 2:
-        obss, actions, rewards, dones, _, next_obss  = utils.to_torch(batch, device=self.device)
-        # else:
-        #     obs, action, reward, next_obs, dones, _, _ = utils.to_torch(batch, device=self.device)
+        if len(batch) == 6:
+            obss, actions, rewards, dones_or_discounts, _, next_obss  = utils.to_torch(batch, device=self.device)
+        elif len(batch) == 5:
+            obss, actions, rewards, dones_or_discounts, next_obss = utils.to_torch(batch, device=self.device)
+        
+        if not torch.any(dones_or_discounts == 0.99):
+            discounts = (1-dones_or_discounts) * 0.99
+        else:
+            discounts = dones_or_discounts
 
         if self.stage == 2:
             update_encoder = self.stage2_update_encoder
@@ -295,9 +311,9 @@ class DrQv2Agent(BaseAgent):
         # with torch.no_grad():
         #     next_obss = self.encoder(next_obss).flatten(start_dim=1)
 
-        for i in range(self.utd_ratio):
+        for i in range(utd_ratio):
 
-            obs, action, reward, next_obs, done = self.slice(i, obss, actions, rewards, next_obss, dones)
+            obs, action, reward, next_obs, discount = self.slice(i, obss, actions, rewards, next_obss, discounts)
 
             # encode
             if update_encoder:
@@ -310,11 +326,11 @@ class DrQv2Agent(BaseAgent):
                 next_obs = self.encoder(next_obs).flatten(start_dim=1)
 
             # update critic
-            metrics.update(self.update_critic_drqv2(obs, action, reward, done, next_obs,
+            metrics.update(self.update_critic_drqv2(obs, action, reward, discount, next_obs,
                                                 stddev, update_encoder,))
 
         # update actor, following previous works, we do not use actor gradient for encoder update
-        metrics.update(self.update_actor_drqv2(obs.detach(), action, stddev,))
+        metrics.update(self.update_actor_drqv2(obs.detach(), action, stddev, bc_weight))
 
         metrics['batch_reward'] = reward.mean().item()
 
@@ -322,14 +338,14 @@ class DrQv2Agent(BaseAgent):
         update_exponential_moving_average(self.critic, self.critic_target, self.critic_target_tau)
         return metrics
 
-    def update_critic_drqv2(self, obs, action, reward, dones, next_obs, stddev, update_encoder):
+    def update_critic_drqv2(self, obs, action, reward, discount, next_obs, stddev, update_encoder):
         metrics = dict()
 
         with torch.no_grad():
             dist = self.actor.get_dist(next_obs, stddev)
-            next_action = dist.sample()
+            next_action = dist.sample(clip=self.stddev_clip)
             target_V = self.critic_target.compute_q(next_obs, next_action)
-            target_Q = reward + (1-dones) * 0.99 * target_V
+            target_Q = reward + discount *  target_V
 
         critic_loss = self.critic.compute_loss(obs, action, target_Q)
 
@@ -348,7 +364,7 @@ class DrQv2Agent(BaseAgent):
 
         return metrics
 
-    def update_actor_drqv2(self, obs, action, stddev,):
+    def update_actor_drqv2(self, obs, behavor_action, stddev, bc_weight):
         metrics = dict()
         c = self.loss_cfg
 
@@ -364,7 +380,13 @@ class DrQv2Agent(BaseAgent):
         """
         combine actor losses and optimize
         """
-        actor_loss_combined = actor_loss
+        if bc_weight > 0:
+            # BC loss
+            actor_bc_loss = F.mse_loss(current_action, behavor_action)
+            lam = bc_weight / Q.detach().abs().mean()
+            actor_loss_combined = actor_loss * lam + actor_bc_loss
+        else:
+            actor_loss_combined = actor_loss
 
         self.actor_opt.zero_grad(set_to_none=True)
         actor_loss_combined.backward()

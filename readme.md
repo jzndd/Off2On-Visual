@@ -63,15 +63,20 @@ python main2D_offpolicy_v2.py common.devices=[2] common.seed=100 ac_type=drqv2 t
 ```
 
 #### for dmc
-```python
-python main2D_offpolicy_v2.py common.devices=[0] common.seed=10 ac_type=drqv2 task=walker_walk actor_critic.training.batch_size=256 train_with_bc=False is_sparse_reward=False agent.actor_critic_cfg.online_lr=1e-4 img_size=84 evaluation.eval_times=5
+```bash
+python main2D_offpolicy_v2.py common.devices=[0] common.seed=10 ac_type=drqv2 task=walker_walk actor_critic.training.batch_size=512 train_with_bc=False is_sparse_reward=False agent.actor_critic_cfg.online_lr=1e-4 img_size=84 evaluation.eval_times=5
 
 python main2D_offpolicy_v2.py common.devices=[2] common.seed=10 ac_type=drqv2 task=walker_walk actor_critic.training.batch_size=256 train_with_bc=False is_sparse_reward=False agent.actor_critic_cfg.online_lr=1e-4 img_size=84 evaluation.eval_times=5 frame_stack=3
 
-python main2D_offpolicy_v2.py common.devices=[3] common.seed=10 ac_type=drqv2 task=walker_walk actor_critic.training.batch_size=256 train_with_bc=False is_sparse_reward=False agent.actor_critic_cfg.online_lr=1e-4 img_size=84 evaluation.eval_times=5 frame_stack=3 agent.drqv2_cfg.offline_data_ratio=0
+# online & only use online data
+python main2D_offpolicy_v2.py common.devices=[0] common.seed=10 ac_type=drqv2 task=walker_walk actor_critic.training.batch_size=512 train_with_bc=False is_sparse_reward=False agent.actor_critic_cfg.online_lr=1e-4 img_size=84 evaluation.eval_times=5 frame_stack=3 agent.drqv2_cfg.offline_data_ratio=0
+
+# online & only use online data
+python main2D_offpolicy_v2.py common.devices=[0] common.seed=10 ac_type=rlpd task=walker_walk actor_critic.training.batch_size=512 train_with_bc=False is_sparse_reward=False agent.actor_critic_cfg.online_lr=1e-4 img_size=84 evaluation.eval_times=5 frame_stack=3 agent.drqv2_cfg.offline_data_ratio=0.5
+
+# offline & only use offline data
+python main2D_offpolicy_v2.py common.devices=[0] common.seed=10 ac_type=drqv2offline task=walker_walk actor_critic.training.batch_size=512 train_with_bc=True only_bc=True is_sparse_reward=False agent.actor_critic_cfg.online_lr=1e-4 img_size=84 evaluation.eval_times=5 frame_stack=3 agent.drqv2_cfg.bc_weight=2.5
 ```
-
-
 
 ### run script
 
