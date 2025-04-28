@@ -201,6 +201,7 @@ class DrQv2Agent(BaseAgent):
         self.actor = DrQv2Actor(cfg, downstream_input_dim).to(self.device)
         self.critic: EnsembleCritic = EnsembleCritic(cfg, downstream_input_dim, 
                                                      num_critics=drqv2_cfg.num_critics).to(self.device)
+        # self.critic = DoubleQMLP(cfg, downstream_input_dim).to(self.device)
         self.critic_target = copy.deepcopy(self.critic).to(self.device).requires_grad_(False)
 
         # optimizers
@@ -230,7 +231,6 @@ class DrQv2Agent(BaseAgent):
             stddev = utils.schedule(self.stddev_schedule, step)
             if step < self.num_expl_steps and not eval_mode:
                 action = (torch.rand(self.act_dim) * 2 - 1).unsqueeze(0).float()
-                # action = np.random.uniform(0, 1, (self.act_dim,)).astype(np.float32)
                 return action
         else:
             stddev = force_action_std
@@ -278,13 +278,14 @@ class DrQv2Agent(BaseAgent):
             obss, actions, rewards, dones_or_discounts, next_obss = utils.to_torch(batch, device=self.device)
         
         if not torch.any(dones_or_discounts == 0.99):
-            discounts = (1-dones_or_discounts) * 0.99
-        else:
-            discounts = dones_or_discounts
+            discounts = (1-dones_or_discounts) * 0.99  # dones
+        else: 
+            discounts = dones_or_discounts             # discounts
 
         if self.stage == 2:
             update_encoder = self.stage2_update_encoder
             stddev = self.stage2_std
+            # stddev = utils.schedule(self.stddev_schedule, step)
             # conservative_loss_weight = self.cql_weight
 
         if self.stage == 3:
@@ -326,7 +327,7 @@ class DrQv2Agent(BaseAgent):
                 next_obs = self.encoder(next_obs).flatten(start_dim=1)
 
             # update critic
-            metrics.update(self.update_critic_drqv2(obs, action, reward, discount, next_obs,
+            metrics.update(self.update_critic_drqv2(obs, action, reward.float(), discount, next_obs,
                                                 stddev, update_encoder,))
 
         # update actor, following previous works, we do not use actor gradient for encoder update
@@ -335,7 +336,7 @@ class DrQv2Agent(BaseAgent):
         metrics['batch_reward'] = reward.mean().item()
 
         # update critic target networks
-        update_exponential_moving_average(self.critic, self.critic_target, self.critic_target_tau)
+        update_exponential_moving_average(self.critic_target, self.critic, self.critic_target_tau)
         return metrics
 
     def update_critic_drqv2(self, obs, action, reward, discount, next_obs, stddev, update_encoder):
@@ -392,7 +393,7 @@ class DrQv2Agent(BaseAgent):
         actor_loss_combined.backward()
         self.actor_opt.step()
 
-        metrics['actor_loss'] = actor_loss.item()
+        metrics['actor_loss'] = actor_loss_combined.item()
         metrics['actor_logprob'] = log_prob.mean().item()
         metrics['actor_ent'] = dist.entropy().sum(dim=-1).mean().item()
 

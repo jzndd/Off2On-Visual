@@ -33,7 +33,7 @@ common:
   resume: False # do not modify, set by scripts/resume.sh only.
 
 ac_type: ppo  # Optional[ppo, bc, iql]
-offline_buffer: /data/jzn/workspace/ppo_alg/Off2On-Visual/data/${task}_${img_size}/efficient_rb_with_reward.pkl
+offline_buffer: /data/jzn/workspace/ppo_alg/Off2On-Visual/data/${task}_${img_size}/expert_rb_with_reward.pkl
 expert_rb_dir: ${offline_buffer}
 traj_num: 50
 

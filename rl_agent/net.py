@@ -81,6 +81,20 @@ class DoubleQMLP(nn.Module):
         else:
             sa = torch.cat([s, a], dim=1)
         return self._net1(sa), self._net2(sa)
+
+    def compute_q(
+        self, s: torch.Tensor, a: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        q1, q2 = self(s, a)
+        return torch.min(q1, q2)
+    
+    def compute_loss(
+        self, s: torch.Tensor, a: torch.Tensor, y: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        q1, q2 = self(s, a)
+        loss1 = F.mse_loss(q1, y)
+        loss2 = F.mse_loss(q2, y)
+        return loss1 + loss2
     
 class ValueMLP(nn.Module):
     _net: torch.nn.modules.container.Sequential
@@ -239,6 +253,7 @@ class EnsembledLinear(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         out = x @ self.weight + self.bias
         return out
+
 
 
 class EnsembleCritic(nn.Module):

@@ -5,9 +5,6 @@ import random
 from typing import List, Tuple, Union
 
 import cv2
-# from mw_wrapper import make_mw_env
-# from dmc_wrapper import get_dmc_env
-# from dmc_wrapper_state import get_d4rl_env
 import torch
 from omegaconf import DictConfig, OmegaConf
 from rl_agent import PPOAgent2D, VRL3Agent, DrQv2Agent
@@ -46,21 +43,14 @@ class Trainer:
         self._save_path = Path("saved_models")
         self._save_path.mkdir(parents=True, exist_ok=True)
 
-        # if cfg.task in ['button-press-topdown-v2', 'hammer-v2', 'basketball-v2', "button-press-v2"]:
-        #     self.registered_env_func = make_mw_env
-        #     self.domain_name = 'metaworld'
-        # else:
-        #     raise NotImplementedError("Only metaworld supported for now")
-        #     self.registered_env_func = get_d4rl_env
-        #     self.domain_name = 'dmc'
         if cfg.task != "walker_walk":
             from mw_wrapper import make_mw_env
             self.registered_env_func = make_mw_env
             self.domain_name = 'metaworld'
-        else:
-            from dmc_wrapper import get_dmc_env
-            self.registered_env_func = get_dmc_env
-            self.domain_name = 'dmc'
+        # else:
+        #     from dmc_wrapper import get_dmc_env
+        #     self.registered_env_func = get_dmc_env
+        #     self.domain_name = 'dmc'
 
         env = self.registered_env_func(num_envs=1,  device=self._device, **cfg.env.train)
         cfg.agent.actor_critic_cfg.num_actions = deepcopy(env.num_actions)
@@ -105,11 +95,10 @@ class Trainer:
                 if self._cfg.frame_stack > 1:
                     self._cfg.expert_rb_dir = self._cfg.expert_rb_dir.replace(".pkl", f"_stack{self._cfg.frame_stack}.pkl")
             
-            expertrb = OfflineReplaybuffer(1000000, train_env.observation_space.shape[1:], 
+            expertrb = OfflineReplaybuffer(5000, train_env.observation_space.shape[1:], 
                                            (train_env.action_space.shape[1],),
                                            frame_stack=self._cfg.frame_stack)
             expertrb.load(self._cfg.expert_rb_dir)
-
         else:
             expertrb = None
 
@@ -148,7 +137,8 @@ class Trainer:
                                  frame_stack=self._cfg.frame_stack)
         
         if self._cfg.train_with_offline_data_mode == 'vrl3':
-            rb = deepcopy(expertrb)
+            rb.load(self._cfg.expert_rb_dir)
+            expertrb = None
 
         # obs_buffer = deque([], maxlen=cfg.frame_stack)
         if self._cfg.only_bc:
@@ -216,7 +206,7 @@ class Trainer:
                 # if rb.size >= :
                     # print(" ---------------------- begin update {} ------------------".format(self.iter))
                 # always train
-                if self.iter >= 4000:
+                if self._cfg.train_with_offline_data_mode in ['rlpd', 'drqv2'] and self.iter >= 4000:
                     metrics = self.agent.update(rb, self.iter, expertrb)
                     _to_log = []
                     _to_log.append(metrics)

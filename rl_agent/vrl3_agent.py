@@ -313,7 +313,7 @@ class VRL3Agent(BaseAgent):
         metrics['batch_reward'] = reward.mean().item()
 
         # update critic target networks
-        update_exponential_moving_average(self.critic, self.critic_target, self.critic_target_tau)
+        update_exponential_moving_average(self.critic_target, self.critic, self.critic_target_tau)
         # utils.soft_update_params(self.critic, self.critic_target, self.critic_target_tau)
         return metrics
 

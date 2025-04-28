@@ -38,9 +38,9 @@ python main2D.py common.devices=[1] seed=100 ac_type=ppo actor_critic.training.b
 ### vrl3 
 #### for metaworld
 ```bash
-python main2D_offpolicy.py common.devices=[4] seed=100 ac_type=vrl3 task=door-lock-v2 actor_critic.training.batch_size=512 agent.actor_critic_cfg.online_lr=1e-4
+python main2D_offpolicy.py common.devices=[0] seed=100 ac_type=vrl3 task=door-lock-v2 actor_critic.training.batch_size=512 is_sparse_reward=True agent.actor_critic_cfg.online_lr=1e-4
 
-python main2D_offpolicy.py common.devices=[5] seed=100 ac_type=vrl3 task=door-lock-v2 actor_critic.training.batch_size=512 is_sparse_reward=False agent.actor_critic_cfg.online_lr=1e-4
+python main2D_offpolicy.py common.devices=[1] seed=100 ac_type=vrl3 task=door-lock-v2 actor_critic.training.batch_size=512 is_sparse_reward=False agent.actor_critic_cfg.online_lr=1e-4
 ```
 
 #### for dmc
@@ -51,12 +51,16 @@ python main2D_offpolicy.py common.devices=[3] common.seed=10 ac_type=vrl3 task=w
 ### DrQv2+RLPD for metaworld
 
 #### for metaworld
-```python
-# sparse reward
-python main2D_offpolicy_v2.py common.devices=[0] seed=100 ac_type=drqv2-rlpd task=door-lock-v2 actor_critic.training.batch_size=256 train_with_bc=False is_sparse_reward=False agent.actor_critic_cfg.online_lr=1e-4
+```bash
+# dense reward  + RLPD
+python main2D_offpolicy_v2.py common.devices=[0] seed=100 ac_type=rlpd task=door-lock-v2 actor_critic.training.batch_size=256 train_with_bc=False is_sparse_reward=False agent.actor_critic_cfg.online_lr=1e-4 frame_stack=1 agent.drqv2_cfg.offline_data_ratio=0.5
 
-# dense reward
-python main2D_offpolicy_v2.py common.devices=[1] seed=100 ac_type=drqv2-rlpd task=door-lock-v2 actor_critic.training.batch_size=256 train_with_bc=False is_sparse_reward=True agent.actor_critic_cfg.online_lr=1e-4
+python main2D_offpolicy_v2.py common.devices=[0] seed=100 ac_type=rlpd task=door-lock-v2 actor_critic.training.batch_size=256 train_with_bc=False is_sparse_reward=False agent.actor_critic_cfg.online_lr=1e-4 frame_stack=3 agent.drqv2_cfg.offline_data_ratio=0.5
+
+# sparse reward + RLPD
+python main2D_offpolicy_v2.py common.devices=[1] seed=100 ac_type=rlpd task=door-lock-v2 actor_critic.training.batch_size=256 train_with_bc=False is_sparse_reward=True agent.actor_critic_cfg.online_lr=1e-4 frame_stack=1 agent.drqv2_cfg.offline_data_ratio=0.5
+
+python main2D_offpolicy_v2.py common.devices=[1] seed=100 ac_type=rlpd task=door-lock-v2 actor_critic.training.batch_size=256 train_with_bc=False is_sparse_reward=True agent.actor_critic_cfg.online_lr=1e-4 frame_stack=3 agent.drqv2_cfg.offline_data_ratio=0.5
 
 # dense reward + no_offline_data
 python main2D_offpolicy_v2.py common.devices=[2] common.seed=100 ac_type=drqv2 task=door-lock-v2 actor_critic.training.batch_size=256 train_with_bc=False is_sparse_reward=False agent.actor_critic_cfg.online_lr=1e-4 agent.drqv2_cfg.offline_data_ratio=0
@@ -69,13 +73,13 @@ python main2D_offpolicy_v2.py common.devices=[0] common.seed=10 ac_type=drqv2 ta
 python main2D_offpolicy_v2.py common.devices=[2] common.seed=10 ac_type=drqv2 task=walker_walk actor_critic.training.batch_size=256 train_with_bc=False is_sparse_reward=False agent.actor_critic_cfg.online_lr=1e-4 img_size=84 evaluation.eval_times=5 frame_stack=3
 
 # online & only use online data
-python main2D_offpolicy_v2.py common.devices=[0] common.seed=10 ac_type=drqv2 task=walker_walk actor_critic.training.batch_size=512 train_with_bc=False is_sparse_reward=False agent.actor_critic_cfg.online_lr=1e-4 img_size=84 evaluation.eval_times=5 frame_stack=3 agent.drqv2_cfg.offline_data_ratio=0
+python main2D_offpolicy_v2.py common.devices=[1] common.seed=10 ac_type=drqv2 task=walker_walk actor_critic.training.batch_size=256 train_with_bc=False is_sparse_reward=False agent.actor_critic_cfg.online_lr=1e-4 img_size=84 evaluation.eval_times=5 frame_stack=3 agent.drqv2_cfg.offline_data_ratio=0
 
-# online & only use online data
-python main2D_offpolicy_v2.py common.devices=[0] common.seed=10 ac_type=rlpd task=walker_walk actor_critic.training.batch_size=512 train_with_bc=False is_sparse_reward=False agent.actor_critic_cfg.online_lr=1e-4 img_size=84 evaluation.eval_times=5 frame_stack=3 agent.drqv2_cfg.offline_data_ratio=0.5
+# online & use both online and offline data
+python main2D_offpolicy_v2.py common.devices=[0] common.seed=10 ac_type=rlpd task=walker_walk actor_critic.training.batch_size=256 train_with_bc=False is_sparse_reward=False agent.actor_critic_cfg.online_lr=1e-4 img_size=84 evaluation.eval_times=5 frame_stack=3 agent.drqv2_cfg.offline_data_ratio=0.5
 
 # offline & only use offline data
-python main2D_offpolicy_v2.py common.devices=[0] common.seed=10 ac_type=drqv2offline task=walker_walk actor_critic.training.batch_size=512 train_with_bc=True only_bc=True is_sparse_reward=False agent.actor_critic_cfg.online_lr=1e-4 img_size=84 evaluation.eval_times=5 frame_stack=3 agent.drqv2_cfg.bc_weight=2.5
+python main2D_offpolicy_v2.py common.devices=[0] common.seed=10 ac_type=drqv2offline task=walker_walk actor_critic.training.batch_size=256 train_with_bc=True only_bc=True is_sparse_reward=False agent.actor_critic_cfg.online_lr=1e-4 img_size=84 evaluation.eval_times=5 frame_stack=3 agent.drqv2_cfg.bc_weight=2.5
 ```
 
 ### run script

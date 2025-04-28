@@ -79,6 +79,8 @@ class MetaWorldEnv(gymnasium.Env):
         # set render size
         self.env.mujoco_renderer.width = screen_size
         self.env.mujoco_renderer.height = screen_size
+        self.env.model.vis.global_.offwidth = screen_size
+        self.env.model.vis.global_.offheight = screen_size
         # set render mode
         self.env.render_mode = "rgb_array"
         # set render camera
@@ -105,14 +107,6 @@ class MetaWorldEnv(gymnasium.Env):
         _shape = (screen_size, screen_size, 3 * frame_stack)
         self.observation_space = Box(low=_low, high=_high, shape=_shape, dtype=_obs_dtype)
         self.action_space = Box(low=-1., high=1., shape=(4,), dtype=np.float32)
-
-        # self.obs_buffer = [
-        #     np.empty(_shape, dtype=np.uint8),
-        #     np.empty(_shape, dtype=np.uint8),
-        # ]
-        self.obs_buffer = [
-            np.empty(_shape, dtype=np.uint8),
-        ]
 
         self._obs_buffer = deque([], maxlen=frame_stack)
 
@@ -145,8 +139,6 @@ class MetaWorldEnv(gymnasium.Env):
             if terminated or truncated:
                 self.env.reset()
                 break
-
-            self.obs_buffer[0] = self.get_rgb()
 
             # if t == self.frame_skip - 2:
             #     # cam_img = self.env.render()
@@ -202,21 +194,7 @@ class MetaWorldEnv(gymnasium.Env):
     #     return img
 
     def _get_obs(self):
-
-        # if self.frame_skip > 1:  # more efficient in-place pooling
-        #     np.maximum(self.obs_buffer[0], self.obs_buffer[1], out=self.obs_buffer[0])
-
-        # original_obs = self.obs_buffer[1]
-        # obs = self.obs_buffer[0]
-
-        # obs = cv2.resize(
-        #     original_obs,
-        #     (self.screen_size, self.screen_size),
-        #     interpolation=cv2.INTER_AREA,
-        # )
-
-        obs = np.concatenate(list(self._obs_buffer), axis=-1) #  84 * 84 * (3 * frame_stack)
-
+        obs = np.concatenate(list(self._obs_buffer), axis=-1)     #  84 * 84 * (3 * frame_stack)
         return obs
 
 class TorchEnv(gymnasium.Wrapper):
@@ -224,7 +202,6 @@ class TorchEnv(gymnasium.Wrapper):
         super().__init__(env)
         self.env = env
         self.device = device
-        # self.num_envs = env.observation_space.shape[0]
         if len(env.observation_space.shape) == 3:
             raise ValueError("The observation space should have 4 dimensions, first dim is the number of envs")
             self.num_envs = 1
@@ -256,12 +233,7 @@ class TorchEnv(gymnasium.Wrapper):
         return obs, rew, end, trunc, info
 
     def _to_tensor(self, x: Tensor) -> Tensor:
-        # import pdb; pdb.set_trace()
-        # only obs is dict
-        # if isinstance(x, dict):
-        #     x['obs'] = torch.tensor(x, device=self.device).div(255).mul(2).sub(1).permute(0, 3, 1, 2).contiguous()
-        #     x['state'] =  torch.tensor(x, dtype=torch.float32, device=self.device)
-        #     return x
+
         if x.ndim == 4:
             return torch.tensor(x, device=self.device).div(255).mul(2).sub(1).permute(0, 3, 1, 2).contiguous()
         elif x.dtype is np.dtype("bool"):
@@ -276,7 +248,7 @@ if __name__ == "__main__":
     mw_env = make_mw_env("button-press-topdown-v2", 1, device, 128, frame_stack=3)
     obs, info = mw_env.reset()
     while(1):
-        action = torch.rand((2, 4))
+        action = torch.rand((1, 4))
         obs, rew, end, trunc, loop_info = mw_env.step(action)
         if end.any() or trunc.any():
             print("end")

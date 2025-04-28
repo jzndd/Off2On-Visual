@@ -7,6 +7,7 @@ import imageio
 import metaworld
 import os
 import mujoco
+import torch
 
 import numpy as np
 from rl_agent.utils import OfflineReplaybuffer
@@ -45,7 +46,8 @@ def get_stack_obs(obs_buffer):
     """
     Stack the last frame_stack frames together
     """
-    stack_obs = np.concatenate(list(obs_buffer), axis=0) #  (3 * frame_stack) * 84 * 84
+    stack_obs = np.concatenate(list(obs_buffer), axis=-1) #  84 * 84 * (3 * framestack)
+    stack_obs = torch.as_tensor(stack_obs, device="cuda").div(255).mul(2).sub(1).permute(2,0,1).contiguous().detach().cpu().numpy()
     return stack_obs
 
 def gen_traj(policy, seed, env_name, ep_num, dataset_name, max_path_length=100, 
@@ -87,13 +89,10 @@ def gen_traj(policy, seed, env_name, ep_num, dataset_name, max_path_length=100,
         env.camera_name="corner2"
         cam_img = env.render()
         cam_img = np.flipud(cam_img).copy()
-        eps_imgs.append(cam_img)
 
         if steps == 0:
             for _ in range(frame_stack):
                 obs_buffer.append(cam_img)
-        else:
-            obs_buffer.append(cam_img)
         
         stack_obs = get_stack_obs(obs_buffer)
         eps_imgs.append(stack_obs)
@@ -161,8 +160,6 @@ def gen_traj(policy, seed, env_name, ep_num, dataset_name, max_path_length=100,
                 seq_num += 1
                 seed += 1
                 env = make_env(seed=seed, max_path_length=max_path_length, img_size=img_size, render_mode="rgb_array")
-                # print(f'{env_name}{env.action_space.low}')
-                # print(f'{env_name}{env.action_space.high}')
                 obs, info = env.reset()
 
                 print(f"{env_name}, {seq_num}, Episode return: {ret}, traj_num: {steps}")
@@ -231,7 +228,7 @@ if __name__ == "__main__":
     env_seed = 1500
     save_data = True
     use_random = False
-    use_sparse_reward = False
+    use_sparse_reward = True
     save_whole_traj = True
     img_size = 96
     frame_stack = 3

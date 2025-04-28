@@ -42,7 +42,8 @@ def store_d4rl_dataset(env_name: str, buffer: EfficientReplayBuffer, file_save_p
                     obs_buffer.append(observations[i])  # 84 * 84 * 3
                 rew = rewards[i]
                 act = actions[i]
-                stack_obs = np.concatenate(list(obs_buffer), axis=0) 
+                stack_obs = np.concatenate(list(obs_buffer), axis=0)
+                stack_obs = torch.as_tensor(stack_obs, device="cuda").div(255).mul(2).sub(1).contiguous().detach().cpu().numpy()
                 dis = discounts[i]
                 buffer.store(stack_obs, act, rew, dis, True)
                 continue
@@ -55,7 +56,7 @@ def store_d4rl_dataset(env_name: str, buffer: EfficientReplayBuffer, file_save_p
 
             obs_buffer.append(observations[i]) 
             stack_obs = np.concatenate(list(obs_buffer), axis=0) #  (3 * frame_stack) * 84 * 84
-            # next_obs = observations[i]
+            stack_obs = torch.as_tensor(stack_obs, device="cuda").div(255).mul(2).sub(1).contiguous().detach().cpu().numpy()
             rew = rewards[i]
             act = actions[i]
             dis = discounts[i]
@@ -71,12 +72,11 @@ def store_d4rl_dataset(env_name: str, buffer: EfficientReplayBuffer, file_save_p
 
     print(f"Stored {buffer.size} transitions in the buffer.")
 
-    save_name = "efficient_rb_with_reward.pkl"
+    save_name = "efficient_rb_with_reward_nofirst.pkl"
     if frame_stack > 1:
-        save_name = f"efficient_rb_with_reward_stack{frame_stack}.pkl"
+        save_name = f"efficient_rb_with_reward_stack{frame_stack}_nofirst.pkl"
 
     batch = buffer.sample(256)
-    import pdb; pdb.set_trace()
 
     buffer.save(f"{file_save_path}/{save_name}")
     # file_save_path

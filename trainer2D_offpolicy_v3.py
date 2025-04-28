@@ -5,9 +5,6 @@ import random
 from typing import List, Tuple, Union
 
 import cv2
-# from mw_wrapper import make_mw_env
-# from dmc_wrapper import get_dmc_env
-# from dmc_wrapper_state import get_d4rl_env
 import torch
 from omegaconf import DictConfig, OmegaConf
 from rl_agent import PPOAgent2D, VRL3Agent, DrQv2Agent
@@ -46,13 +43,6 @@ class Trainer:
         self._save_path = Path("saved_models")
         self._save_path.mkdir(parents=True, exist_ok=True)
 
-        # if cfg.task in ['button-press-topdown-v2', 'hammer-v2', 'basketball-v2', "button-press-v2"]:
-        #     self.registered_env_func = make_mw_env
-        #     self.domain_name = 'metaworld'
-        # else:
-        #     raise NotImplementedError("Only metaworld supported for now")
-        #     self.registered_env_func = get_d4rl_env
-        #     self.domain_name = 'dmc'
         if cfg.task != "walker_walk":
             from mw_wrapper import make_mw_env
             self.registered_env_func = make_mw_env
@@ -124,16 +114,19 @@ class Trainer:
             else:
                 for i in range(cfg.training.offline_steps):
                     metrics = self.agent.update(None, i, expertrb)
-                    if (i+1) % 500 == 0:
+                    if i % 1000 == 0:
                         print(f"bc_actor_warmup_steps: {i}")
-                        to_log = self.test_actor_critic(eval_times=10)
-
-                        _to_log = []
-                        _to_log.append(metrics)
-                        _to_log = [{f"actor_critic/train/{k}": v for k, v in d.items()} for d in _to_log]
+                        print(metrics)
+                    _to_log = []
+                    _to_log.append(metrics)
+                    _to_log = [{f"actor_critic/train/{k}": v for k, v in d.items()} for d in _to_log]
+                    to_log += _to_log
+                    if i % 5000 == 0:
+                        _to_log = self.test_actor_critic(eval_times=10)
                         to_log += _to_log
 
-                        wandb_log(to_log, i)
+                    wandb_log(to_log, i)
+                    to_log = []
 
                 os.makedirs(os.path.dirname(self.bc_ckpt_dir), exist_ok=True)
                 torch.save({

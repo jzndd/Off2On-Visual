@@ -16,15 +16,15 @@ actor_critic_cfg:
   img_size: ${env.train.size}
   num_actions: ???
   num_states: ???
-  depth: 3
+  depth: 2
   acitive_fn: 'relu'
-  online_lr: 3e-6
+  online_lr: 3e-4
   frame_stack: ${frame_stack}
   image_size: ${img_size}
   use_trunk: ${use_trunk}
   trunk_ln: True
   trunk_activation: 'tanh'
-  critic_ln: False
+  critic_ln: True
 
 ppo_cfg:
   _target_: models.rl_agent.baseagent.PPOConfig

@@ -12,7 +12,7 @@ def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
     return layer
 
 def to_torch(xs, device):
-    return tuple(torch.as_tensor(x.detach(), device=device) if x is not None else x for x in xs)
+    return tuple(torch.as_tensor(x, device=device) if x is not None else x for x in xs)
 
 def compute_returns(rewards, gamma, dones, truncs=None):
     # R = 0
@@ -319,26 +319,26 @@ class OfflineReplaybuffer:
         assert len(obs.shape) == 3 or len(obs.shape) == 4
 
         # only when offline, the obs is 3D, need to deal
-        if len(obs.shape) == 3:
-            if obs.shape[2] == 3 * self.frame_stack:
-                # (128,128,3) -> (3,128,128)
-                obs = np.transpose(obs, (2,0,1))
-                next_obs = np.transpose(next_obs, (2,0,1))
-
-            if obs.max() > 1:
-                obs = ( obs / 255.0 ) * 2 - 1
-                next_obs = ( next_obs / 255.0 ) * 2 - 1
-        
         assert obs.max() <= 1 and obs.min() >= -1 and obs.min() <= 0, f"obs max {obs.max()} min {obs.min()}"
 
-        self.obs[self.ptr] = obs
-        self.rew[self.ptr] = rew
-        self.done[self.ptr] = done
-        self.act[self.ptr] = act
-        self.obs_[self.ptr] = next_obs
-        self.ptr = (self.ptr + 1) % self.capacity
-
-        self.size = min(self.size + 1, self.capacity)
+        if len(obs.shape) == 3:
+            np.copyto(self.obs[self.ptr], obs)
+            np.copyto(self.obs_[self.ptr], next_obs) 
+            np.copyto(self.act[self.ptr], act)
+            self.rew[self.ptr] = rew
+            self.done[self.ptr] = done
+            self.ptr = (self.ptr + 1) % self.capacity
+            self.size = min(self.size + 1, self.capacity)
+        else:
+            b, _, _, _ = obs.shape
+            for i in range(b):
+                np.copyto(self.obs[self.ptr], obs[i])
+                np.copyto(self.obs_[self.ptr], next_obs[i]) 
+                np.copyto(self.act[self.ptr], act[i])
+                self.rew[self.ptr] = rew[i]
+                self.done[self.ptr] = done[i]
+                self.ptr = (self.ptr + 1) % self.capacity
+                self.size = min(self.size + 1, self.capacity)
 
     def sample(self, mini_batch_size):
         """
@@ -514,6 +514,188 @@ class EfficientReplayBuffer:
         self.ims_channels = obs_shape[0] // self.frame_stack
         self.act_shape = act_shape
 
+        self.obs = np.zeros([self.buffer_size, self.ims_channels, *self.obs_shape[1:]], dtype=np.float32)
+        self.act = np.zeros([self.buffer_size, *self.act_shape], dtype=np.float32)
+        self.rew = np.zeros([self.buffer_size], dtype=np.float32)
+        self.dis = np.zeros([self.buffer_size], dtype=np.float32)
+        self.valid = np.zeros([self.buffer_size], dtype=np.bool_)
+
+    def _initial_setup(self, obs, act):
+        self.size = 0
+
+    def add_data_point(self, obs, act, rew, dis, first):
+        # first = time_step.first()
+        # latest_obs = time_step.observation[-self.ims_channels:]
+        latest_obs = obs[-self.ims_channels:]
+        if first:
+            end_index = self.size + self.frame_stack
+            end_invalid = end_index + self.frame_stack + 1
+            if end_invalid > self.buffer_size:
+                if end_index > self.buffer_size:
+                    end_index = end_index % self.buffer_size
+                    self.obs[self.size:self.buffer_size] = latest_obs
+                    self.obs[0:end_index] = latest_obs
+                    self.full = True
+                else:
+                    self.obs[self.size:end_index] = latest_obs
+                end_invalid = end_invalid % self.buffer_size
+                self.valid[self.size:self.buffer_size] = False
+                self.valid[0:end_invalid] = False
+            else:
+                self.obs[self.size:end_index] = latest_obs
+                self.valid[self.size:end_invalid] = False
+            self.size = end_index
+            self.traj_index = 1
+        else:
+            np.copyto(self.obs[self.size], latest_obs)  # Check most recent image
+            np.copyto(self.act[self.size], act)
+            self.rew[self.size] = rew
+            self.dis[self.size] = dis
+            self.valid[(self.size + self.frame_stack) % self.buffer_size] = False
+            if self.traj_index >= self.nstep:
+                self.valid[(self.size - self.nstep + 1) % self.buffer_size] = True
+            self.size += 1
+            self.traj_index += 1
+            if self.size == self.buffer_size:
+                self.size = 0
+                self.full = True
+
+    def store(self, obs, act, rew, dis, first):
+
+        if obs.max() > 1:
+            raise ValueError(f"obs max {obs.max()} min {obs.min()}")
+
+        if len(obs.shape) == 3:
+            self.add_data_point(obs, act, rew, dis, first)
+            return
+
+        if first:
+            self.add_data_point(obs[0], act, rew, dis, first)
+
+        else:
+            for i in range(obs.shape[0]):
+                self.add_data_point(obs[i], act[i], rew[i], dis[i], first)
+
+    # def __next__(self, ):
+    def sample(self, mini_batch_size):
+        indices = np.random.choice(self.valid.nonzero()[0], size=int(mini_batch_size))
+        return self.gather_nstep_indices(indices)
+
+    def gather_nstep_indices(self, indices):
+        n_samples = indices.shape[0]
+        all_gather_ranges = np.stack([np.arange(indices[i] - self.frame_stack, indices[i] + self.nstep)
+                                      for i in range(n_samples)], axis=0) % self.buffer_size
+        gather_ranges = all_gather_ranges[:, self.frame_stack:]  # bs x nstep
+        obs_gather_ranges = all_gather_ranges[:, :self.frame_stack]
+        nobs_gather_ranges = all_gather_ranges[:, -self.frame_stack:]
+
+        all_rewards = self.rew[gather_ranges]
+
+        # Could implement below operation as a matmul in pytorch for marginal additional speed improvement
+        rew = np.sum(all_rewards * self.discount_vec, axis=1, keepdims=True)
+
+        obs = np.reshape(self.obs[obs_gather_ranges], [n_samples, *self.obs_shape])
+        nobs = np.reshape(self.obs[nobs_gather_ranges], [n_samples, *self.obs_shape])
+
+        assert obs.shape[2] == obs.shape[3], f"obs shape {obs.shape[3]} != {obs.shape[4]}"
+
+        act = self.act[indices]
+
+        dis = np.expand_dims(self.next_dis * self.dis[nobs_gather_ranges[:, -1]], axis=-1)
+
+        obs = torch.from_numpy(obs).float()
+        nobs = torch.from_numpy(nobs).float()
+        act = torch.from_numpy(act).float()
+        rew = torch.from_numpy(rew).float()
+        dis = torch.from_numpy(dis).float()
+
+        if self.sarsa:
+            nact = self.act[indices + self.nstep]
+            return (obs, act, rew, dis, nobs, nact)
+
+        return (obs, act, rew, dis, nobs)
+
+    def __len__(self):
+        if self.full:
+            return self.buffer_size
+        else:
+            return self.size
+
+    def get_train_and_val_indices(self, validation_percentage):
+        all_indices = self.valid.nonzero()[0]
+        num_indices = all_indices.shape[0]
+        num_val = int(num_indices * validation_percentage)
+        np.random.shuffle(all_indices)
+        val_indices, train_indices = np.split(all_indices,
+                                              [num_val])
+        return train_indices, val_indices
+
+    def get_obs_act_batch(self, indices):
+        n_samples = indices.shape[0]
+        obs_gather_ranges = np.stack([np.arange(indices[i] - self.frame_stack, indices[i])
+                                      for i in range(n_samples)], axis=0) % self.buffer_size
+        obs = np.reshape(self.obs[obs_gather_ranges], [n_samples, *self.obs_shape])
+        act = self.act[indices]
+        return obs, act
+    
+    def save(self, filepath):
+        """
+        Saves the replay buffer to a file using pickle, saving only valid data.
+
+        Args:
+            filepath (str): Path to save the buffer.
+        """
+        with open(filepath, 'wb') as f:
+            pickle.dump({
+                'obs': self.obs[:self.size],  # Only save the valid part
+                'rew': self.rew[:self.size],
+                'dis': self.dis[:self.size],
+                'act': self.act[:self.size],
+                'valid': self.valid[:self.size],
+            }, f)
+        print(f"Buffer saved to {filepath}")
+    
+    def load(self, filepath):
+        """
+        Loads the replay buffer from a file using pickle.
+
+        Args:
+            filepath (str): Path to load the buffer from.
+        """
+        with open(filepath, 'rb') as f:
+            data = pickle.load(f)
+            assert len(data['obs']) == len(data['rew']) == len(data['dis']) == len(data['act'])
+            self.obs[:len(data['obs'])] = data['obs']
+            self.rew[:len(data['rew'])] = data['rew']
+            self.dis[:len(data['dis'])] = data['dis']
+            self.act[:len(data['act'])] = data['act']
+            self.valid[:len(data['valid'])] = data['valid']
+            self.size = len(data['obs'])
+        print(f"Buffer loaded from {filepath}")
+
+
+class EfficientReplayBufferV2:
+    '''Fast + efficient replay buffer implementation in numpy.'''
+
+    def __init__(self, capacity, obs_shape, act_shape, frame_stack=1, nstep=1, discount=0.99,
+                 data_specs=None, sarsa=False):
+        self.buffer_size = capacity
+        self.data_dict = {}
+        self.size = 0
+        self.traj_index = 0
+        self.frame_stack = frame_stack
+        self._recorded_frames = frame_stack + 1
+        self.nstep = nstep
+        self.discount = discount
+        self.full = False
+        self.discount_vec = np.power(discount, np.arange(nstep))  # n_step - first dim should broadcast
+        self.next_dis = discount ** nstep
+        self.sarsa = sarsa
+
+        self.obs_shape = obs_shape
+        self.ims_channels = obs_shape[0] // self.frame_stack
+        self.act_shape = act_shape
+
         self.obs = np.zeros([self.buffer_size, self.ims_channels, *self.obs_shape[1:]], dtype=np.uint8)
         self.act = np.zeros([self.buffer_size, *self.act_shape], dtype=np.float32)
         self.rew = np.zeros([self.buffer_size], dtype=np.float32)
@@ -561,9 +743,13 @@ class EfficientReplayBuffer:
                 self.full = True
 
     def store(self, obs, act, rew, dis, first):
-        # buffer 中存入 int 数据
-        if obs.max() < 1.1:
-            obs = ((obs + 1) / 2 * 255).astype(np.uint8)
+
+        if obs.max() > 1:
+            raise ValueError(f"obs max {obs.max()} min {obs.min()}")
+
+        if len(obs.shape) == 3:
+            self.add_data_point(obs, act, rew, dis, first)
+            return
 
         if first:
             self.add_data_point(obs[0], act, rew, dis, first)
@@ -599,8 +785,9 @@ class EfficientReplayBuffer:
 
         dis = np.expand_dims(self.next_dis * self.dis[nobs_gather_ranges[:, -1]], axis=-1)
 
-        obs = torch.from_numpy((obs / 255.0) * 2 - 1).float()
-        nobs = torch.from_numpy((nobs / 255.0) * 2 - 1).float()
+        obs = torch.from_numpy(obs).float()
+        nobs = torch.from_numpy(nobs).float()
+
         act = torch.from_numpy(act).float()
         rew = torch.from_numpy(rew).float()
         dis = torch.from_numpy(dis).float()

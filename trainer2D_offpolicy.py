@@ -86,18 +86,18 @@ class Trainer:
 
         to_log = []
 
-        # First stage: BC
-        if self._cfg.train_with_bc:
-            if self.domain_name == 'metaworld':
-                if self._cfg.expert_rb_dir is not None:
-                    if self._cfg.is_sparse_reward:
-                        self._cfg.expert_rb_dir = self._cfg.expert_rb_dir.replace("reward", "reward_sparse")
-                    if self._cfg.is_whole_traj:
-                        self._cfg.expert_rb_dir = self._cfg.expert_rb_dir.replace(".pkl", "_whole_traj_50traj.pkl")
-                
+        if self.domain_name == 'metaworld':
+            if self._cfg.expert_rb_dir is not None:
+                if self._cfg.is_sparse_reward:
+                    self._cfg.expert_rb_dir = self._cfg.expert_rb_dir.replace("reward", "reward_sparse")
+                if self._cfg.is_whole_traj:
+                    self._cfg.expert_rb_dir = self._cfg.expert_rb_dir.replace(".pkl", "_whole_traj_50traj.pkl")
+    
             expertrb = OfflineReplaybuffer(2000000, train_env.observation_space.shape[1:], (train_env.action_space.shape[1],))
             expertrb.load(self._cfg.expert_rb_dir)
-            
+
+        # First stage: BC
+        if self._cfg.train_with_bc:
             if os.path.exists(self.bc_ckpt_dir):
                 ckpt = torch.load(self.bc_ckpt_dir, self._device)
                 self.agent.load_state_dict(ckpt["agent"])
@@ -122,8 +122,6 @@ class Trainer:
                 }, self.bc_ckpt_dir)
 
         self.agent.bc_transfer_ac()
-
-        rb = expertrb
 
         if self._cfg.only_bc:
             exit(1) 
@@ -189,7 +187,7 @@ class Trainer:
                 # if rb.size >= :
                     # print(" ---------------------- begin update {} ------------------".format(self.iter))
                 # always train
-                metrics = self.agent.update(rb, self.iter)
+                metrics = self.agent.update(expertrb, self.iter)
                 _to_log = []
                 _to_log.append(metrics)
                 _to_log = [{f"actor_critic/train/{k}": v for k, v in d.items()} for d in _to_log]
