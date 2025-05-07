@@ -104,7 +104,7 @@ class Trainer:
                 if self._cfg.is_whole_traj:
                     self._cfg.expert_rb_dir = self._cfg.expert_rb_dir.replace(".pkl", "_whole_traj_50traj.pkl")
                 
-                expertrb = OfflineReplaybuffer(110000, train_env.observation_space.shape[1:], (train_env.action_space.shape[1],))
+                expertrb = OfflineReplaybuffer(5000, train_env.observation_space.shape[1:], (train_env.action_space.shape[1],))
                 expertrb.load(self._cfg.expert_rb_dir)
                 expertrb.compute_returns()
             
@@ -113,6 +113,7 @@ class Trainer:
                 # ckpt = torch.load(self.bc_ckpt_dir, self._device, weights_only=True)
                 self.agent.load_state_dict(ckpt["agent"])
                 print("load bc ckpt from {}".format(self.bc_ckpt_dir))
+                self.test_actor_critic(self._cfg.evaluation.eval_times)
             else:
                 for i in range(bc_actor_warmup_steps):
                     metrics = self.agent.bc_actor_update(expertrb)
@@ -166,6 +167,8 @@ class Trainer:
 
                     if self._cfg.is_sparse_reward:
                         rew = torch.tensor(info['success'], device=self._device, dtype=torch.float32)
+                        if not self._cfg.is_whole_traj:
+                            rew = rew - 1
 
                     step += 1
                     eps_rew += rew
@@ -213,7 +216,7 @@ class Trainer:
                 wandb_log(to_log, self.iter)
                 to_log = []
 
-            print("this traj eps rew is {}, and the traj len is {}".format(eps_rew, step))
+            print("Current Iter is {}, this traj eps rew is {}, and the traj len is {}".format(self.iter, eps_rew, step))
 
     @torch.no_grad()
     def test_actor_critic(self, eval_times=25):

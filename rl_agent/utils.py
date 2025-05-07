@@ -269,9 +269,8 @@ class OnlineReplayBuffer:
         return result
         
         # return self.obs[:self.size], self.act[:self.size], self.rew[:self.size], self.done[:self.size], self.next_obs[:self.size]
-    
 
-class OfflineReplaybuffer:
+class OnpolicyOfflineReplaybuffer:
     def __init__(self, capacity, obs_shape=(3, 84, 84), action_shape=(4,), frame_stack=1):
         """
         Initializes the ReplayBuffer.
@@ -317,9 +316,10 @@ class OfflineReplaybuffer:
         # detect obs
         # image input
         assert len(obs.shape) == 3 or len(obs.shape) == 4
-
-        # only when offline, the obs is 3D, need to deal
-        assert obs.max() <= 1 and obs.min() >= -1 and obs.min() <= 0, f"obs max {obs.max()} min {obs.min()}"
+        assert obs.shape[-1] == obs.shape[-2]
+        
+        if not (obs.max() <= 1 or obs.min() < 0):
+            raise ValueError(f"{obs.max()} and {obs.min()}")
 
         if len(obs.shape) == 3:
             np.copyto(self.obs[self.ptr], obs)
@@ -355,19 +355,229 @@ class OfflineReplaybuffer:
         indices = np.random.choice(self.size - 1, int(mini_batch_size), replace=False)
 
         # Convert numpy arrays to torch tensors
-        # obs_batch = torch.tensor(self.obs[indices], dtype=torch.float32)
-        # next_obs_batch = torch.tensor(self.obs_[indices], dtype=torch.float32)
-        # act_batch = torch.tensor(self.act[indices], dtype=torch.float32)
-        # rew_batch = torch.tensor(self.rew[indices], dtype=torch.float32)
-        # done_batch = torch.tensor(self.done[indices], dtype=torch.float32)
-        obs_batch = torch.from_numpy(self.obs[indices]).float()
-        next_obs_batch = torch.from_numpy(self.obs_[indices]).float()
-        act_batch = torch.from_numpy(self.act[indices]).float()
-        rew_batch = torch.from_numpy(self.rew[indices]).float()
-        done_batch = torch.from_numpy(self.done[indices]).float()
+        obs_batch = self.obs[indices]
+        next_obs_batch = self.obs_[indices]
+        act_batch = self.act[indices]
+        rew_batch = self.rew[indices]
+        done_batch = self.done[indices]
+
+        obs_batch = torch.from_numpy(obs_batch).float()
+        next_obs_batch = torch.from_numpy(next_obs_batch).float()
+        act_batch = torch.from_numpy(act_batch).float()
+        rew_batch = torch.from_numpy(rew_batch).float()
+        done_batch = torch.from_numpy(done_batch).float()
 
         if self.returns is not None:
-            # returns_batch = torch.tensor(self.returns[indices], dtype=torch.float32)
+            returns_batch = self.returns[indices]
+            returns_batch = torch.from_numpy(self.returns[indices]).float()
+            return obs_batch, act_batch, rew_batch, done_batch, returns_batch, next_obs_batch
+        else:
+            return obs_batch, act_batch, rew_batch, done_batch, None, next_obs_batch
+        
+    def sample_all(self):
+        """
+        Returns all the transitions stored in the buffer.
+        return obs, act, rew, done, next_obs
+        """
+
+        return torch.tensor(self.obs[:self.size], dtype=torch.float32), \
+            torch.tensor(self.act[:self.size], dtype=torch.float32), \
+            torch.tensor(self.rew[:self.size], dtype=torch.float32), \
+            torch.tensor(self.done[:self.size], dtype=torch.float32), \
+            torch.tensor(self.obs_[:self.size], dtype=torch.float32)
+
+    def clear(self):
+        """
+        Clears the buffer by resetting the pointer and size.
+        """
+        self.ptr = 0
+        self.size = 0
+
+    def save(self, filepath):
+
+        # np.savez_compressed(filepath, 
+        #                     obs=self.obs[:self.size],
+        #                     next_obs=self.obs_[:self.size],
+        #                     act=self.act[:self.size],
+        #                     rew=self.rew[:self.size],
+        #                     done=self.done[:self.size])
+        # print(f"Buffer saved to {filepath}.npz")
+        """
+        Saves the replay buffer to a file using pickle, saving only valid data.
+
+        Args:
+            filepath (str): Path to save the buffer.
+        """
+        with open(filepath, 'wb') as f:
+            pickle.dump({
+                'obs': self.obs[:self.ptr],  # Only save the valid part
+                'rew': self.rew[:self.ptr],
+                'done': self.done[:self.ptr],
+                'act': self.act[:self.ptr],
+                "next_obs": self.obs_[:self.ptr]
+            }, f)
+        print(f"Buffer saved to {filepath}")
+
+    def load(self, filepath):
+        """
+        Loads the replay buffer from a file using pickle.
+
+        Args:
+            filepath (str): Path to load the buffer from.
+        """
+        # try:
+        with open(filepath, 'rb') as f:
+            data = pickle.load(f)
+            assert len(data['obs']) == len(data['rew']) == len(data['done']) == len(data['act'])
+            self.obs[:len(data['obs'])] = data['obs']
+            self.rew[:len(data['rew'])] = data['rew']
+            self.done[:len(data['done'])] = data['done']
+            self.act[:len(data['act'])] = data['act']
+            self.obs_[:len(data['next_obs'])] = data['next_obs']
+            self.size = len(data['obs'])
+            self.ptr = self.size
+        print(f"Buffer loaded from {filepath}")
+
+        # data = np.load(filepath)
+        # N = len(data['obs'])
+        # self.obs[:N] = data['obs']
+        # self.obs_[:N] = data['next_obs']
+        # self.rew[:N] = data['rew']
+        # self.done[:N] = data['done']
+        # self.act[:N] = data['act']
+        # self.ptr = N
+        # self.size = N
+        # print(f"Buffer loaded from {filepath}")
+
+        # except: 
+        #     raise FileNotFoundError(f" {filepath} not found. Please check the file path.")
+
+    def compute_returns(self, gamma=0.99):
+        """
+        Compute the returns for the rewards in the buffer.
+
+        Args:
+            gamma (float): Discount factor for rewards.
+        """
+        returns = np.zeros_like(self.rew)
+        running_return = 0
+        for t in reversed(range(self.size)):
+            running_return = self.rew[t] + gamma * running_return * (1 - self.done[t])
+            returns[t] = running_return
+        self.returns = returns
+
+    def state_normalizer(self):
+        if len(self.obs.shape) == 4:
+            raise NotImplementedError("Only support 1D state")
+        self.mean = self.obs.mean(axis=0)
+        self.std = self.obs.std(axis=0)
+        self.obs = (self.obs - self.mean) / (self.std + 1e-8)
+        self.obs_ = (self.obs_ - self.mean) / (self.std + 1e-8)
+
+class OfflineReplaybuffer:
+    def __init__(self, capacity, obs_shape=(3, 84, 84), action_shape=(4,), frame_stack=1):
+        """
+        Initializes the ReplayBuffer.
+
+        Args:
+            batch_size (int): The maximum number of transitions to store.
+            obs_shape (tuple): Shape of observations (e.g., (3, 128, 128) for images).
+            act_dim (int): Dimension of actions.
+        """
+        self.capacity = capacity
+        self.frame_stack = frame_stack
+        self.ptr = 0
+        self.size = 0
+
+        c, h, w = obs_shape
+        if c == 3:
+            c = c * frame_stack
+        obs_shape = (c, h, w)
+
+        # Allocate storage for buffer
+        self.obs = np.zeros((capacity, *obs_shape), dtype=np.uint8)
+        self.obs_ = np.zeros((capacity, *obs_shape), dtype=np.uint8)
+        self.rew = np.zeros((capacity, 1), dtype=np.float32)
+        self.done = np.zeros((capacity, 1), dtype=np.float32)
+        self.act = np.zeros((capacity, *action_shape), dtype=np.float32)
+
+        self.returns = None
+
+        print("Createing a buffer with capacity: ", capacity)
+
+    def store(self, obs, act, next_obs, rew, done):
+        """
+        Stores a transition in the buffer.
+
+        Args:
+            obs (torch.Tensor): Observation.
+            next_obs (torch.Tensor): Next observation.
+            rew (torch.Tensor): Reward.
+            done (torch.Tensor): Done flag (1 if episode ended, 0 otherwise).
+            trunc (torch.Tensor): Truncated flag (1 if episode truncated, 0 otherwise).
+            act (torch.Tensor): Action.
+        """
+        # detect obs
+        # image input
+        assert len(obs.shape) == 3 or len(obs.shape) == 4
+        assert obs.shape[-1] == obs.shape[-2]
+
+        # only when offline, the obs is 3D, need to deal
+        if obs.max() <= 1. + 1e-5:
+            obs = torch.as_tensor(obs, device="cuda").add(1).div(2).mul(255).byte().detach().cpu().numpy()
+            next_obs = torch.as_tensor(next_obs, device="cuda").add(1).div(2).mul(255).byte().detach().cpu().numpy()
+        
+        if obs.max() <= 1 or obs.min() < 0:
+            raise ValueError(f"{obs.max()} and {obs.min()}")
+
+        if len(obs.shape) == 3:
+            np.copyto(self.obs[self.ptr], obs)
+            np.copyto(self.obs_[self.ptr], next_obs) 
+            np.copyto(self.act[self.ptr], act)
+            self.rew[self.ptr] = rew
+            self.done[self.ptr] = done
+            self.ptr = (self.ptr + 1) % self.capacity
+            self.size = min(self.size + 1, self.capacity)
+        else:
+            b, _, _, _ = obs.shape
+            for i in range(b):
+                np.copyto(self.obs[self.ptr], obs[i])
+                np.copyto(self.obs_[self.ptr], next_obs[i]) 
+                np.copyto(self.act[self.ptr], act[i])
+                self.rew[self.ptr] = rew[i]
+                self.done[self.ptr] = done[i]
+                self.ptr = (self.ptr + 1) % self.capacity
+                self.size = min(self.size + 1, self.capacity)
+
+    def sample(self, mini_batch_size):
+        """
+        Samples a mini-batch of transitions and returns as torch tensors.
+
+        Args:
+            mini_batch_size (int): Number of transitions to sample.
+        Returns:
+            Tuple: A tuple of torch tensors (obs, act, rew, done, return, next_obs).
+        """
+        if self.size == 0:
+            raise ValueError("Buffer is empty, cannot sample.")
+
+        indices = np.random.choice(self.size - 1, int(mini_batch_size), replace=False)
+
+        # Convert numpy arrays to torch tensors
+        obs_batch = self.obs[indices]
+        next_obs_batch = self.obs_[indices]
+        act_batch = self.act[indices]
+        rew_batch = self.rew[indices]
+        done_batch = self.done[indices]
+
+        obs_batch = torch.from_numpy(obs_batch).float()
+        next_obs_batch = torch.from_numpy(next_obs_batch).float()
+        act_batch = torch.from_numpy(act_batch).float()
+        rew_batch = torch.from_numpy(rew_batch).float()
+        done_batch = torch.from_numpy(done_batch).float()
+
+        if self.returns is not None:
+            returns_batch = self.returns[indices]
             returns_batch = torch.from_numpy(self.returns[indices]).float()
             return obs_batch, act_batch, rew_batch, done_batch, returns_batch, next_obs_batch
         else:

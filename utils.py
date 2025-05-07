@@ -91,3 +91,20 @@ class VideoRecorder:
 
 def to_np(xs):
     return tuple(x.squeeze(0).detach().cpu().numpy() for x in xs)
+
+
+import time
+
+class Timer:
+    def __init__(self):
+        self._start_time = time.time()
+        self._last_time = time.time()
+
+    def reset(self):
+        elapsed_time = time.time() - self._last_time
+        self._last_time = time.time()
+        total_time = time.time() - self._start_time
+        return elapsed_time, total_time
+
+    def total_time(self):
+        return time.time() - self._start_time

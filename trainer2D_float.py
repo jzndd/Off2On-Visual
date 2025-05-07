@@ -1,20 +1,21 @@
-from collections import deque
 import os
 from pathlib import Path
 import random
 from typing import List, Tuple, Union
 
 import cv2
+from mw_wrapper import make_mw_env
+# from dmc_wrapper_state import get_d4rl_env
 import torch
 from omegaconf import DictConfig, OmegaConf
-from rl_agent import PPOAgent2D, VRL3Agent, DrQv2Agent, CP3ERAgent
+from rl_agent import PPOAgent2D
 import wandb
 import numpy as np
-from rl_agent.utils import OfflineReplaybuffer, OnlineReplayBuffer
+from rl_agent.utils import OfflineReplaybuffer, OnlineReplayBuffer, OnpolicyOfflineReplaybuffer
 
 from utils import VideoRecorder, wandb_log, Normalization, to_np
 import sys
-import time
+
 from copy import deepcopy
 
 class Trainer:
@@ -35,7 +36,7 @@ class Trainer:
         )
 
         self.iter = 0
-        self._cfg = cfg
+
         # self._path_video_dir = os.path.join(root_dir, "videos")
         # os.makedirs(self._path_video_dir, exist_ok=True)
         self._path_video_dir = Path("videos")
@@ -43,14 +44,16 @@ class Trainer:
         self._save_path = Path("saved_models")
         self._save_path.mkdir(parents=True, exist_ok=True)
 
-        if cfg.task != "walker_walk":
-            from mw_wrapper import make_mw_env
-            self.registered_env_func = make_mw_env
-            self.domain_name = 'metaworld'
+        # if cfg.task in ['button-press-topdown-v2', 'hammer-v2', 'basketball-v2', "button-press-v2"]:
+        #     self.registered_env_func = make_mw_env
+        #     self.domain_name = 'metaworld'
         # else:
-        #     from dmc_wrapper import get_dmc_env
-        #     self.registered_env_func = get_dmc_env
+        #     raise NotImplementedError("Only metaworld supported for now")
+        #     self.registered_env_func = get_d4rl_env
         #     self.domain_name = 'dmc'
+
+        self.registered_env_func = make_mw_env
+        self.domain_name = 'metaworld'
 
         env = self.registered_env_func(num_envs=1,  device=self._device, **cfg.env.train)
         cfg.agent.actor_critic_cfg.num_actions = deepcopy(env.num_actions)
@@ -59,71 +62,69 @@ class Trainer:
         # self.test_env = self.registered_env_func(num_envs=1, device=self._device, **cfg.env.test)
         # obs, info = self.test_env.reset()
         # init agent
-        if cfg.ac_type == "rlpd" or cfg.ac_type == "cp3er":
-            self.agent: DrQv2Agent = DrQv2Agent(cfg.agent.actor_critic_cfg, cfg.agent.drqv2_cfg)
-        elif cfg.ac_type == "cp3er":
-            self.agent: CP3ERAgent = CP3ERAgent(cfg.agent.actor_critic_cfg, cfg.agent.cp3er_cfg, self._device)
+        self.agent: PPOAgent2D = PPOAgent2D(cfg.agent.actor_critic_cfg, cfg.agent.ppo_cfg)
         self.agent.to(self._device)
         self.agent.setup_training(cfg.actor_critic.actor_critic_loss)
 
         self.metrics = -0.01
 
+        if cfg.is_sparse_reward:
+            cfg.bc_ckpt_dir = cfg.bc_ckpt_dir.replace("/bc", "_sparse/bc")
+        
+        if cfg.is_whole_traj:
+            cfg.bc_ckpt_dir = cfg.bc_ckpt_dir.replace("/bc", "_wholetraj/bc")
+
+        # print(os.path.exists(cfg.bc_ckpt_dir))
+        # print(cfg.bc_ckpt_dir)
+        # exit(1)
+
         self.bc_ckpt_dir = cfg.bc_ckpt_dir
+        self._cfg = cfg
 
         self.best_success_rate = -0.01
 
-        self.train_env = self.registered_env_func(num_envs=cfg.collection.train.num_envs, device=self._device, **cfg.env.train)
-        self.test_env = self.registered_env_func(num_envs=self._cfg.collection.test.num_envs, device=self._device, **self._cfg.env.test)
-
     def run(self):
         cfg = self._cfg
+        train_env = self.registered_env_func(num_envs=cfg.collection.train.num_envs, device=self._device, **cfg.env.train)
     
         max_iter = self._cfg.training.online_max_iter
+        bc_actor_warmup_steps = self._cfg.training.bc_actor_warmup_steps
+        bc_critic_warmup_steps = self._cfg.training.bc_critic_warmup_steps
 
         # assert self._cfg.actor_critic.training.batch_size >= 1024  # PPO's batch_size >= 1024
-        # rb = OnlineReplayBuffer(1000000, train_env.observation_space.shape[1:], (train_env.action_space.shape[1],))
+        rb = OnlineReplayBuffer(self._cfg.actor_critic.training.batch_size, train_env.observation_space.shape[1:], (train_env.action_space.shape[1],))
 
         to_log = []
 
-        if self._cfg.expert_rb_dir is not None and self._cfg.train_with_offline_data_mode in ['rlpd', 'vrl3', 'drqv2offline', 'cp3er']:
-            if self.domain_name == 'metaworld':
+        # First stage: BC
+        if self._cfg.train_with_bc:
+            if self._cfg.expert_rb_dir is not None:
                 if self._cfg.is_sparse_reward:
                     self._cfg.expert_rb_dir = self._cfg.expert_rb_dir.replace("reward", "reward_sparse")
                 if self._cfg.is_whole_traj:
                     self._cfg.expert_rb_dir = self._cfg.expert_rb_dir.replace(".pkl", "_whole_traj_50traj.pkl")
-
-            elif self.domain_name == 'dmc':
-                if self._cfg.frame_stack > 1:
-                    self._cfg.expert_rb_dir = self._cfg.expert_rb_dir.replace(".pkl", f"_stack{self._cfg.frame_stack}.pkl")
-            
-            expertrb = OfflineReplaybuffer(5000, self.train_env.observation_space.shape[1:], 
-                                           (self.train_env.action_space.shape[1],),
-                                           frame_stack=self._cfg.frame_stack)
-            expertrb.load(self._cfg.expert_rb_dir)
-        else:
-            expertrb = None
-
-        # First stage: BC
-        if self._cfg.train_with_bc:
+                
+                expertrb = OnpolicyOfflineReplaybuffer(5000, train_env.observation_space.shape[1:], (train_env.action_space.shape[1],))
+                expertrb.load(self._cfg.expert_rb_dir)
+                expertrb.compute_returns()
             
             if os.path.exists(self.bc_ckpt_dir):
                 ckpt = torch.load(self.bc_ckpt_dir, self._device)
-                # ckpt = torch.load(self.bc_ckpt_dir, self._device, weights_only=True)
                 self.agent.load_state_dict(ckpt["agent"])
                 print("load bc ckpt from {}".format(self.bc_ckpt_dir))
+                self.test_actor_critic(self._cfg.evaluation.eval_times)
             else:
-                for i in range(cfg.training.offline_steps):
-                    metrics = self.agent.update(None, i, expertrb)
+                for i in range(bc_actor_warmup_steps):
+                    metrics = self.agent.bc_actor_update(expertrb)
                     if (i+1) % 5000 == 0:
                         print(f"bc_actor_warmup_steps: {i}")
-                        to_log = self.test_actor_critic(eval_times=10)
+                        self.test_actor_critic(eval_times=10)
 
-                        _to_log = []
-                        _to_log.append(metrics)
-                        _to_log = [{f"actor_critic/train/{k}": v for k, v in d.items()} for d in _to_log]
-                        to_log += _to_log
+                for i in range(bc_critic_warmup_steps):
+                    metrics = self.agent.bc_critic_update(expertrb)
 
-                        wandb_log(to_log, i)
+                to_log += self.test_actor_critic(self._cfg.evaluation.eval_times)
+                self.save_agents("bc", to_log[0]["actor_critic/test/avg_reward"])
 
                 os.makedirs(os.path.dirname(self.bc_ckpt_dir), exist_ok=True)
                 torch.save({
@@ -132,24 +133,13 @@ class Trainer:
 
         self.agent.bc_transfer_ac()
 
-        # use RLPD, a empty buffer
-        rb = OfflineReplaybuffer(1000000, self.train_env.observation_space.shape[1:], 
-                                 (self.train_env.action_space.shape[1],),
-                                 frame_stack=self._cfg.frame_stack)
-        
-        if self._cfg.train_with_offline_data_mode == 'vrl3':
-            rb.load(self._cfg.expert_rb_dir)
-            expertrb = None
-
-        # obs_buffer = deque([], maxlen=cfg.frame_stack)
         if self._cfg.only_bc:
             exit(1) 
 
         while self.iter < max_iter:
 
             # -----------------------------   2-stage params update   -----------------------------
-            obs, _ = self.train_env.reset()
-
+            obs, _ = train_env.reset()
             done = False
             eps_rew = 0
             step = 0
@@ -160,8 +150,7 @@ class Trainer:
             while not done:
                 self.iter += 1
                 with torch.no_grad():
-
-                    real_act_tuple = self.agent.predict_act(obs, step=self.iter)
+                    real_act_tuple = self.agent.predict_act(obs)
                     if isinstance(real_act_tuple, Tuple):
                         real_act = real_act_tuple[0]
                         old_log_prob = real_act_tuple[1]
@@ -173,9 +162,9 @@ class Trainer:
                         real_act = real_act_tuple
                         old_log_prob = None
 
-                    next_obs, rew, terminated, trunc, info = self.train_env.step(real_act)
+                    next_obs, rew, terminated, trunc, info = train_env.step(real_act)
 
-                    if self.domain_name == "metaworld" and self._cfg.is_sparse_reward:
+                    if self._cfg.is_sparse_reward:
                         rew = torch.tensor(info['success'], device=self._device, dtype=torch.float32)
                         if not self._cfg.is_whole_traj:
                             rew = rew - 1
@@ -198,21 +187,21 @@ class Trainer:
                         # rerference: https://github.com/Lizhi-sjtu/DRL-code-pytorch/blob/8f767b99ad44990b49f6acf3159660c5594db77e/5.PPO-continuous/PPO_continuous_main.py#L100
                         dw = torch.tensor(done.bool() & (~trunc.bool()), dtype=torch.uint8, device=done.device) # loss and win but not trunc (because if loss, there is no next state)
 
-                    # rb.store(obs, next_obs, rew, done, real_act, old_log_prob=old_log_prob, 
-                    #         state_value=state_value, dw=dw)
-                    rb.store(obs.detach().cpu().numpy(), real_act.detach().cpu().numpy(), next_obs.detach().cpu().numpy(), 
-                             rew.detach().cpu().numpy(), done.detach().cpu().numpy())
+                    rb.store(obs, next_obs, rew, done, real_act, old_log_prob=old_log_prob, 
+                            state_value=state_value, dw=dw)
                     
                     obs = next_obs
 
                 # ------------------------------------ should train ? ---------------------------------
-                # always train
-                if self._cfg.train_with_offline_data_mode in ['rlpd', 'drqv2', 'cp3er'] and self.iter >= self._cfg.num_until_update:
-                    metrics = self.agent.update(rb, self.iter, expertrb)
+                
+                if rb.size >= self._cfg.actor_critic.training.batch_size:
+                    print(" ---------------------- begin update {} ------------------".format(self.iter))
+                    metrics = self.agent.update(rb, self.iter, max_iter)
                     _to_log = []
                     _to_log.append(metrics)
                     _to_log = [{f"actor_critic/train/{k}": v for k, v in d.items()} for d in _to_log]
                     to_log += _to_log
+                    rb.clear()
 
                 # ------------------------------------ should test ? ---------------------------------
 
@@ -230,15 +219,14 @@ class Trainer:
 
     @torch.no_grad()
     def test_actor_critic(self, eval_times=25):
-        test_env = self.test_env
+        test_env = make_mw_env(num_envs=self._cfg.collection.test.num_envs, device=self._device, **self._cfg.env.test)
         total_reward = 0.0
         success_rate = 0.0
         video_recorder = VideoRecorder(self._path_video_dir)
         for i in range(eval_times):
             seed = random.randint(0, 2**31 - 1)
             obs, _ = test_env.reset(seed=[seed + i for i in range(test_env.num_envs)])
-            # enabled=True if i==eval_times-1 else False
-            enabled=False
+            enabled=True if i==eval_times-1 else False
             video_recorder.init(obs, enabled=enabled)
             success = False
             steps = 0
@@ -259,9 +247,7 @@ class Trainer:
                 steps += 1
                 total_reward += rew.sum().item()
 
-                if self.domain_name == 'metaworld':
-
-                    success |= bool(info['success'])
+                success |= bool(info['success'])
 
                 obs = next_obs
 
@@ -272,7 +258,7 @@ class Trainer:
                 success_rate += 1
 
             video_recorder.save(f"{self.iter}.mp4")
-            print("the {} traj success is {}, steps is {}".format(i, success, steps))
+            print("the {} traj success is {} and steps is {}".format(i, success, steps))
 
 
         success_rate = success_rate / eval_times

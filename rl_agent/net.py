@@ -8,7 +8,8 @@ from typing import List, Optional, Tuple, Union
 from rl_agent.baseagent import ActorCriticConfig
 from rl_agent import utils
 from torch import Tensor
-from torch.distributions import Beta, Normal   
+from torch.distributions import Beta, Normal  
+from rl_agent.cm import ConsistencyModel 
 
 # Trick 8: orthogonal initialization
 def orthogonal_init(layer, gain=1.0):
@@ -483,6 +484,40 @@ class DrQv2Actor(nn.Module):
         mean = torch.tanh(mean)
         
         return mean, std
+
+# Actor Network
+class CPActor(nn.Module):
+    """
+    A network module designed to function as an actor in a reinforcement learning framework,
+    adhering to a specified consistency policy (CP). This actor network outputs action values
+    given state inputs by utilizing an internal consistency model.
+
+    Parameters:
+    - repr_dim (int): Dimensionality of the state representation input to the model.
+    - action_dim (int): Dimensionality of the action space.
+    - device (str, optional): The device (e.g., 'cuda:1') on which the model computations will be performed.
+
+    Output:
+    - forward(state, return_dict=False): Processes the input state through the ConsistencyModel.
+    """
+
+    def __init__(self, cfg: ActorCriticConfig, repr_dim, device="cuda"):
+
+        super(CPActor, self).__init__()
+
+        self.device = device
+
+        self.cm = ConsistencyModel(cfg, state_dim=repr_dim, device=device,)
+        self.to(device)
+
+    def forward(self, state):
+        return self.cm(state)
+    
+    def to(self, device):
+        super(CPActor, self).to(device)
+    
+    def loss(self, action, state):
+        return self.cm.consistency_losses(action, state)
     
 class Actorlog(nn.Module):
     def __init__(self, cfg: ActorCriticConfig, repr_dim, use_std_share_network=False,) -> None:
@@ -569,6 +604,9 @@ class ActorCriticEncoder(nn.Module):
         # self.apply(utils.weight_init)
 
     def forward(self, obs):
+        if obs.max() > 1. + 1e-5:
+            # import pdb; pdb.set_trace()
+            obs = obs / 255.0 * 2 - 1
         h = self.convnet(obs)
         h = h.view(h.shape[0], -1)
         return h

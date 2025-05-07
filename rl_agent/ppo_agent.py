@@ -45,7 +45,6 @@ class PPOAgent2D(BaseAgent):
         self,
         cfg: ActorCriticConfig,
         ppo_cfg: PPOConfig,
-        use_old_policy: bool = True,
         # adv_compute_mode: str = "tradition", # optional:"tradition", "gae", "q-v", "iql"
     ):
         super().__init__(cfg)

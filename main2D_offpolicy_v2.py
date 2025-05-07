@@ -32,6 +32,8 @@ def main(cfg: DictConfig) -> None:
         # for vrl3
         cfg.training.online_max_iter=10000
         cfg.training.offline_steps = 50
+
+        cfg.num_until_update = 2000
         # cfg.training.online_max_iter = 2000
         # cfg.evaluation.every_iter = 1000
         # cfg.evaluation.eval_times = 1

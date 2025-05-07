@@ -4,7 +4,7 @@ from copy import deepcopy
 from typing import Any, Dict, List, Optional, Tuple
 
 import gymnasium
-from gymnasium.vector import AsyncVectorEnv
+from gymnasium.vector import AsyncVectorEnv, SyncVectorEnv
 from omegaconf import ListConfig
 import numpy as np
 import torch
@@ -115,6 +115,7 @@ class MetaWorldEnv(gymnasium.Env):
 
     def get_rgb(self):
         # cam names: ('topview', 'corner', 'corner2', 'corner3', 'behindGripper', 'gripperPOV')
+        self.env.camera_name="corner2"
         img = self.env.render()
         cam_img = np.flipud(img).copy()
         return cam_img
@@ -233,7 +234,6 @@ class TorchEnv(gymnasium.Wrapper):
         return obs, rew, end, trunc, info
 
     def _to_tensor(self, x: Tensor) -> Tensor:
-
         if x.ndim == 4:
             return torch.tensor(x, device=self.device).div(255).mul(2).sub(1).permute(0, 3, 1, 2).contiguous()
         elif x.dtype is np.dtype("bool"):
@@ -256,11 +256,13 @@ if __name__ == "__main__":
     print("info", loop_info['success'])
     print("end", end)
     print("trunc", trunc)
+    print("obs", obs.shape)
 
     # print(obs.shape)
-    # obs_np = obs[0].add(1).div(2).mul(255).byte().permute(1,2,0).cpu().numpy()
-    # import matplotlib.pyplot as plt
-    # plt.imshow(obs_np, cmap='viridis')  # Adjust cmap based on your data
-    # plt.colorbar()
-    # plt.title("Observation")
-    # plt.savefig("/DATA/disk0/jzn/Diamond/observation.png")
+    # obs_np = obs[ :, :, -3:].add(1).div(2).mul(255).byte().permute(2,0,1).cpu().numpy()
+    obs_np = obs[0, -3:, :, :].add(1).div(2).mul(255).byte().permute(1,2,0).cpu().numpy()
+    import matplotlib.pyplot as plt
+    plt.imshow(obs_np, cmap='viridis')  # Adjust cmap based on your data
+    plt.colorbar()
+    plt.title("Observation")
+    plt.savefig("observation.png")

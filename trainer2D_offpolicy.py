@@ -69,20 +69,25 @@ class Trainer:
         # print(cfg.bc_ckpt_dir)
         # exit(1)
 
+        if cfg.is_sparse_reward:
+            cfg.bc_ckpt_dir = cfg.bc_ckpt_dir.replace("/bc", "_sparse/bc")
+        
+        if cfg.is_whole_traj:
+            cfg.bc_ckpt_dir = cfg.bc_ckpt_dir.replace("/bc", "_wholetraj/bc")
+
         self.bc_ckpt_dir = cfg.bc_ckpt_dir
 
         self.best_success_rate = -0.01
 
+        self.train_env = self.registered_env_func(num_envs=cfg.collection.train.num_envs, device=self._device, **cfg.env.train)
+        self.test_env = self.registered_env_func(num_envs=self._cfg.collection.test.num_envs, device=self._device, **self._cfg.env.test)
+
     def run(self):
         cfg = self._cfg
-        train_env = self.registered_env_func(num_envs=cfg.collection.train.num_envs, device=self._device, **cfg.env.train)
     
         max_iter = self._cfg.training.online_max_iter
         bc_actor_warmup_steps = self._cfg.training.bc_actor_warmup_steps
         bc_critic_warmup_steps = self._cfg.training.bc_critic_warmup_steps
-
-        # assert self._cfg.actor_critic.training.batch_size >= 1024  # PPO's batch_size >= 1024
-        # rb = OnlineReplayBuffer(1000000, train_env.observation_space.shape[1:], (train_env.action_space.shape[1],))
 
         to_log = []
 
@@ -93,7 +98,7 @@ class Trainer:
                 if self._cfg.is_whole_traj:
                     self._cfg.expert_rb_dir = self._cfg.expert_rb_dir.replace(".pkl", "_whole_traj_50traj.pkl")
     
-            expertrb = OfflineReplaybuffer(2000000, train_env.observation_space.shape[1:], (train_env.action_space.shape[1],))
+            expertrb = OfflineReplaybuffer(2000000, self.train_env.observation_space.shape[1:], (self.train_env.action_space.shape[1],))
             expertrb.load(self._cfg.expert_rb_dir)
 
         # First stage: BC
@@ -129,7 +134,7 @@ class Trainer:
         while self.iter < max_iter:
 
             # -----------------------------   2-stage params update   -----------------------------
-            obs, _ = train_env.reset()
+            obs, _ = self.train_env.reset()
             done = False
             eps_rew = 0
             step = 0
@@ -152,10 +157,12 @@ class Trainer:
                         real_act = real_act_tuple
                         old_log_prob = None
 
-                    next_obs, rew, terminated, trunc, info = train_env.step(real_act)
+                    next_obs, rew, terminated, trunc, info = self.train_env.step(real_act)
 
                     if self.domain_name == "metaworld" and self._cfg.is_sparse_reward:
                         rew = torch.tensor(info['success'], device=self._device, dtype=torch.float32)
+                        if not self._cfg.is_whole_traj:
+                            rew = rew - 1
 
                     step += 1
                     eps_rew += rew
@@ -177,10 +184,10 @@ class Trainer:
 
                     # rb.store(obs, next_obs, rew, done, real_act, old_log_prob=old_log_prob, 
                     #         state_value=state_value, dw=dw)
-                    rb.store(obs.detach().cpu().numpy(), real_act.detach().cpu().numpy(), next_obs.detach().cpu().numpy(), 
-                             rew.detach().cpu().numpy(), done.detach().cpu().numpy())
-                    
-                    obs = next_obs
+                expertrb.store(obs.detach().cpu().numpy(), real_act.detach().cpu().numpy(), next_obs.detach().cpu().numpy(), 
+                            rew.detach().cpu().numpy(), done.detach().cpu().numpy())
+                
+                obs = next_obs
 
                 # ------------------------------------ should train ? ---------------------------------
                 
@@ -209,7 +216,7 @@ class Trainer:
 
     @torch.no_grad()
     def test_actor_critic(self, eval_times=25):
-        test_env = self.registered_env_func(num_envs=self._cfg.collection.test.num_envs, device=self._device, **self._cfg.env.test)
+        test_env = self.test_env
         total_reward = 0.0
         success_rate = 0.0
         video_recorder = VideoRecorder(self._path_video_dir)
@@ -273,6 +280,8 @@ class Trainer:
         print(f"{self._cfg.task} :Success rate: {success_rate}, Average reward: {avg_reward}")
         to_log = [{f"actor_critic/test/{k}": v for k, v in d.items()} for d in to_log]
         print("end test actor_critic")
+
+        test_env.close()
 
         return to_log
 

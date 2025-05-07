@@ -5,6 +5,7 @@ from mw_wrapper import TorchEnv, make_mw_env
 import torch
 from omegaconf import DictConfig, OmegaConf
 import hydra
+# from trainer2D_float import Trainer
 from trainer2D import Trainer
 os.environ["MUJOCO_GL"] = "egl"
 
