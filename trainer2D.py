@@ -198,6 +198,7 @@ class Trainer:
                 if rb.size >= self._cfg.actor_critic.training.batch_size:
                     print(" ---------------------- begin update {} ------------------".format(self.iter))
                     metrics = self.agent.update(rb, self.iter, max_iter)
+                    print("the batch reward is {}, and success times is {}".format(metrics["batch_reward"], metrics["success_times"]))
                     _to_log = []
                     _to_log.append(metrics)
                     _to_log = [{f"actor_critic/train/{k}": v for k, v in d.items()} for d in _to_log]
@@ -216,7 +217,7 @@ class Trainer:
                 wandb_log(to_log, self.iter)
                 to_log = []
 
-            print("Current Iter is {}, this traj eps rew is {}, and the traj len is {}".format(self.iter, eps_rew, step))
+            # print("Current Iter is {}, this traj eps rew is {}, and the traj len is {}".format(self.iter, eps_rew, step))
 
     @torch.no_grad()
     def test_actor_critic(self, eval_times=25):

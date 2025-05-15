@@ -18,7 +18,7 @@ actor_critic_cfg:
   num_states: ???
   depth: 2
   acitive_fn: 'relu'
-  online_lr: 3e-4
+  online_lr: 3e-6
   frame_stack: ${frame_stack}
   image_size: ${img_size}
   use_trunk: ${use_trunk}
@@ -30,14 +30,16 @@ ppo_cfg:
   _target_: models.rl_agent.baseagent.PPOConfig
   mini_batch_size: 64
   clip_param: 0.2
-  K_epochs: 10
+  K_epochs: 6
   max_grad_norm: 0.5
   adv_compute_mode: 'gae' 
   use_adam_eps: True
   use_std_share_network: False
   use_state_norm: True
   use_lr_decay: True
-  use_bc: false
+  use_bc: False
+  target_kl: 0.2
+  clip_vloss: True
 
 drqv2_cfg:
   __target__: DrQv2Config

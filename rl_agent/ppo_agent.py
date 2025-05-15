@@ -39,6 +39,8 @@ class PPOConfig:
     use_lr_decay: bool = True
     use_state_norm: bool = True
     use_bc: bool = False
+    target_kl: float = 0.2
+    clip_vloss: bool = True
 
 class PPOAgent2D(BaseAgent):
     def __init__(
@@ -62,6 +64,8 @@ class PPOAgent2D(BaseAgent):
         self.ppo_cfg = ppo_cfg
 
         self.use_bc = ppo_cfg.use_bc
+        self.target_kl = ppo_cfg.target_kl
+        self.clip_vloss = ppo_cfg.clip_vloss
         ## network initialization
 
         self.online_lr = cfg.online_lr
@@ -78,7 +82,7 @@ class PPOAgent2D(BaseAgent):
 
         self.adv_compute_mode = ppo_cfg.adv_compute_mode
 
-        if self.adv_compute_mode in ['tradition', 'q-v', 'gae']:
+        if self.adv_compute_mode in ['tradition', 'q-v', 'gae','gae2']:
             # use GAE to estimate the advantage
             self.value = ValueMLP(cfg, self.encoder.repr_dim,)
             self.value_optim = optim.Adam(self.value.parameters(), lr=3e-4)
@@ -97,10 +101,19 @@ class PPOAgent2D(BaseAgent):
     def predict_act(self, obs: torch.Tensor, eval_mode=False, **kwargss) -> ActorCriticOutput:
         assert obs.ndim == 4  # Ensure observation shape is correct
         h = self.encoder(obs).flatten(start_dim=1)
-        if self.adv_compute_mode == 'tradition' and not eval_mode:
+        if self.adv_compute_mode in ['tradition', 'gae2','gae'] and not eval_mode:
             # When tradition, return both action and state_value
             return *self.actor.get_action(h, eval_mode=eval_mode), self.value(h)
         return self.actor.get_action(h, eval_mode=eval_mode)
+    
+    def get_value(self, obs: torch.Tensor) -> torch.Tensor:
+        assert obs.ndim == 4
+        if self.fix_encoder:
+            with torch.no_grad():
+                h = self.encoder(obs).flatten(start_dim=1)
+        else:
+            h = self.encoder(obs).flatten(start_dim=1)
+        return self.value(h)
 
     def bc_actor_update(self, rb: OfflineReplaybuffer):
 
@@ -108,6 +121,13 @@ class PPOAgent2D(BaseAgent):
         bacth = rb.sample(mini_batch_size=256)
 
         obs, act, reward, done, returns, obs_ = to_torch(bacth, self.device)
+        # save obs as images
+        # obs = obs.permute(0, 2, 3, 1)
+        # obs = obs.cpu().numpy()
+        # save_path = '/data0/jzn/workspace/Off2On-Visual/train_img.png'
+        # from PIL import Image
+        # img = Image.fromarray((obs[0]).astype('uint8'))
+        # img.save(save_path)
 
         h = self.encoder(obs).flatten(start_dim=1)
 
@@ -187,7 +207,7 @@ class PPOAgent2D(BaseAgent):
             {'params': self.encoder.parameters(), 'lr': self.online_lr},
         ])
 
-        self.fix_encoder = False
+        self.fix_encoder = True
 
         self.set_old_policy()
         # self.encoder.requires_grad_(False)
@@ -199,6 +219,11 @@ class PPOAgent2D(BaseAgent):
         batch = rb.sample_all()
         obss, acts, rews, next_obss, dones, old_log_probs, old_state_values, dws = to_torch(batch, self.device)
 
+        batch_reward = rews.sum() 
+        success_times = batch_reward - (-rb.capacity)
+
+        num_steps = obss.shape[0]
+        
         if self.fix_encoder:
             with torch.no_grad():
                 obss = self.encoder(obss).flatten(start_dim=1)
@@ -208,7 +233,7 @@ class PPOAgent2D(BaseAgent):
             next_obss = self.encoder(next_obss).flatten(start_dim=1)
 
         if self.use_bc:
-            bc_act = self.actor.get_action(obss, eval_mode=True)
+            bc_act = self.old_actor.get_action(obss, eval_mode=True)
 
         # old_log_probs = old_log_probs.squeeze(-1)
         old_state_values = old_state_values.squeeze(-1) if old_state_values is not None else None
@@ -233,22 +258,39 @@ class PPOAgent2D(BaseAgent):
                 advantages = torch.min(*self.doubleq(obss, acts)) - self.value(obss)
                 advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-10)
             elif self.adv_compute_mode in ['gae','iql2gae']:
-                adv = []
-                gae = 0
                 vs = self.value(obss)
                 next_vs = self.value(next_obss)
-                deltas = rews + 0.99 * (1.0 - dws) * next_vs - vs
-                for delta, d in zip(reversed(deltas.flatten().cpu().numpy()), reversed(dones.flatten().cpu().numpy())):
-                    gae = delta + 0.99 * self.gae_lambda * gae * (1.0 - d)
-                    adv.insert(0, gae)
-                advantages = torch.tensor(adv, dtype=torch.float32).view(-1,1).to(self.device)
+                advantages = torch.zeros_like(rews).to(self.device)
+                lastgaelam = 0
+                for t in reversed(range(num_steps)):
+                    nextnonterminal = 1.0 - dones[t]
+                    if t == num_steps - 1:
+                        next_value = next_vs[t]
+                    else:
+                        next_value = vs[t + 1]
+                    # real_next_values = next_not_done * nextvalues + final_values[t]
+                    # delta = rews[t] + 0.99 * real_next_values - old_state_values[t]
+                    delta = rews[t] + 0.99 * next_value * nextnonterminal - vs[t]
+                    advantages[t] = lastgaelam = delta + 0.99 * self.gae_lambda * nextnonterminal * lastgaelam
                 v_target = advantages + vs
                 advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-10)
+                # adv = []
+                # gae = 0
+                # deltas = rews + 0.99 * (1.0 - dws) * next_vs - vs
+                # for delta, d in zip(reversed(deltas.flatten().cpu().numpy()), reversed(dones.flatten().cpu().numpy())):
+                #     gae = delta + 0.99 * self.gae_lambda * gae * (1.0 - d)
+                #     adv.insert(0, gae)
+                # advantages = torch.tensor(adv, dtype=torch.float32).view(-1,1).to(self.device)
+                # v_target = advantages + vs
+                # advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-10)
             elif self.adv_compute_mode == 'iql':
                 advantages = self.critic.get_advantage(obss, acts)
                 advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-10)
 
         batch_size = rb.size
+        clipfracs = []
+
+        value_losses = []
 
         for i in range(self.K_epochs):
             for index in BatchSampler(SubsetRandomSampler(range(batch_size)), self.mini_batch_size, False):
@@ -268,15 +310,32 @@ class PPOAgent2D(BaseAgent):
                         q_loss = 0.5 * F.mse_loss(q1, target_q) + 0.5 * F.mse_loss(q2, target_q)
                 elif self.adv_compute_mode in ['gae','iql2gae']:
                     state_value = self.value(obss[index])
-                    value_loss = F.mse_loss(state_value, v_target[index])
+                    if self.clip_vloss:
+                        v_loss_unclipped = (state_value- v_target[index]) ** 2
+                        v_clipped = vs[index] + torch.clamp(state_value - vs[index], -self.clip_param, self.clip_param)
+                        v_loss_clipped = (v_clipped - v_target[index]) ** 2
+                        value_loss = 0.5 * torch.max(v_loss_unclipped, v_loss_clipped).mean()
+                    else:
+                        value_loss = F.mse_loss(state_value, v_target[index])
+                    value_losses.append(value_loss.item())
                     q_loss = torch.tensor(0.0)
                 elif self.adv_compute_mode == "iql":
                     value_loss = torch.tensor(0.0)
                     q_loss = torch.tensor(0.0)
                     self.critic.update(obss[index], acts[index], rews[index], 1-dones[index], next_obss[index])
 
-                ratios = torch.exp(log_prob.sum(1, keepdim=True) - old_log_probs[index].sum(1, keepdim=True).detach())
+                logratio = log_prob.sum(1) - old_log_probs[index].sum(1).detach()
+                ratios = torch.exp(logratio)
+
+                with torch.no_grad():
+                    # calculate approx_kl http://joschu.net/blog/kl-approx.html
+                    old_approx_kl = (-logratio).mean()
+                    approx_kl = ((ratios - 1) - logratio).mean()
+                    clipfracs += [((ratios - 1.0).abs() > self.clip_param).float().mean().item()]
         
+                if approx_kl > self.target_kl:
+                    break
+                
                 entropy_loss = -c.weight_entropy_loss * dist.entropy().sum(1, keepdim=True)
                 surrogate = -advantages[index] * ratios
                 surrogate_clipped = -advantages[index] * torch.clamp(ratios,
@@ -296,41 +355,255 @@ class PPOAgent2D(BaseAgent):
                 else:
                     self.critic.update(obss[index], acts[index], rews[index], 1-dones[index], next_obss[index])
         
-        loss = policy_loss + critic_loss
+                loss = policy_loss + critic_loss
 
-        self.optim.zero_grad()
-        loss.backward()
-        nn.utils.clip_grad_norm_(self.actor.parameters(), self.max_grad_norm)
-        nn.utils.clip_grad_norm_(self.value.parameters(), self.max_grad_norm)
-        nn.utils.clip_grad_norm_(self.encoder.parameters(), self.max_grad_norm)
-        self.optim.step()
+                self.optim.zero_grad()
+                loss.backward()
+                nn.utils.clip_grad_norm_(self.actor.parameters(), self.max_grad_norm)
+                nn.utils.clip_grad_norm_(self.value.parameters(), self.max_grad_norm)
+                nn.utils.clip_grad_norm_(self.encoder.parameters(), self.max_grad_norm)
+                self.optim.step()
+
+            if approx_kl > self.target_kl:
+                break
 
         # if self.ppo_cfg.use_lr_decay and iter is not None and max_iter is not None:
         #     self.lr_decay(iter, max_iter)
+        import pdb; pdb.set_trace()
 
         return {"policy_loss": policy_loss.item(), "value_loss": value_loss, "entropy_loss": entropy_loss.mean().item(),
                 "surrogate": surrogate.mean().item(), "surrogate_clipped": surrogate_clipped.mean().item(),
-                "bc_loss": bc_loss.mean().item(),} 
+                "bc_loss": bc_loss.mean().item(),
+                "approx_kl": approx_kl.item(),
+                "clipfracs": np.mean(clipfracs),
+                "batch_reward": batch_reward.item(), "success_times": success_times.item(),} 
+    
+    def update_vector(self, rb: OnlineReplayBuffer,):
 
+        c = self.loss_cfg
+    
+        batch = rb.sample_all()
+        obss, acts, rews, next_obss, dones, old_log_probs, old_state_value = to_torch(batch, self.device)
+
+        # obs shape
+        # obss: (num_step, num_envs, 3, 128, 128)
+
+        batch_reward = rews.sum() 
+        success_times = batch_reward - (-rb.capacity)
+
+        num_steps = obss.shape[0]
+    
+        with torch.no_grad():
+            advantages = torch.zeros_like(rews).to(self.device)
+            lastgaelam = 0
+            for t in reversed(range(num_steps)):
+                nextnonterminal = 1.0 - dones[t]
+                if t == num_steps - 1:
+                    next_value = self.get_value(next_obss[t]).view(-1)
+                else:
+                    next_value = old_state_value[t + 1]
+
+                delta = rews[t] + 0.99 * next_value * nextnonterminal - old_state_value[t]
+                advantages[t] = lastgaelam = delta + 0.99 * self.gae_lambda * nextnonterminal * lastgaelam
+            returns = advantages + old_state_value
+            # advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-10)
+
+        batch_size = rb.capacity
+        clipfracs = []
+        value_losses = []
+
+        # flatten the batch
+        b_obs = obss.reshape((-1,) + obss.shape[-3:])
+        if self.fix_encoder:
+            with torch.no_grad():
+                b_obs = self.encoder(b_obs).flatten(start_dim=1)
+        else:
+            b_obs = self.encoder(b_obs).flatten(start_dim=1)
+
+        b_logprobs = old_log_probs.reshape((-1,) + acts.shape[-1:])
+        b_actions = acts.reshape((-1,) + acts.shape[-1:])
+        b_advantages = advantages.reshape(-1)
+        b_advantages = (b_advantages - b_advantages.mean()) / (b_advantages.std() + 1e-10)
+        b_returns = returns.reshape(-1)
+        b_values = old_state_value.reshape(-1)
+
+        for i in range(self.K_epochs):
+            for index in BatchSampler(SubsetRandomSampler(range(batch_size)), self.mini_batch_size, False):
+                dist = self.actor.get_dist(b_obs[index])
+                log_prob = dist.log_prob(b_actions[index])
+
+                state_value = self.value(b_obs[index])
+                if self.clip_vloss:
+                    v_loss_unclipped = (state_value- b_returns[index]) ** 2
+                    v_clipped = b_values[index] + torch.clamp(state_value - b_values[index], -self.clip_param, self.clip_param)
+                    v_loss_clipped = (v_clipped - b_returns[index]) ** 2
+                    value_loss = 0.5 * torch.max(v_loss_unclipped, v_loss_clipped).mean()
+                else:
+                    value_loss = F.mse_loss(state_value, b_returns[index])
+                value_losses.append(value_loss.item())
+
+                logratio = log_prob.sum(1) - b_logprobs[index].sum(1).detach()
+                ratios = torch.exp(logratio)
+
+                with torch.no_grad():
+                    # calculate approx_kl http://joschu.net/blog/kl-approx.html
+                    old_approx_kl = (-logratio).mean()
+                    approx_kl = ((ratios - 1) - logratio).mean()
+                    clipfracs += [((ratios - 1.0).abs() > self.clip_param).float().mean().item()]
+        
+                if approx_kl > self.target_kl:
+                    break
+                
+                entropy_loss = -c.weight_entropy_loss * dist.entropy().sum(1, keepdim=True)
+                surrogate = -b_advantages[index] * ratios
+                surrogate_clipped = -b_advantages[index] * torch.clamp(ratios,
+                                                       1.0 - self.clip_param, 1.0 + self.clip_param)
+                
+                policy_loss = torch.max(surrogate, surrogate_clipped) + entropy_loss
+                policy_loss = policy_loss.mean()
+
+                loss = policy_loss + 0.5 * value_loss
+
+                self.optim.zero_grad()
+                loss.backward()
+                nn.utils.clip_grad_norm_(self.actor.parameters(), self.max_grad_norm)
+                nn.utils.clip_grad_norm_(self.value.parameters(), self.max_grad_norm)
+                nn.utils.clip_grad_norm_(self.encoder.parameters(), self.max_grad_norm)
+                self.optim.step()
+
+            if approx_kl > self.target_kl:
+                break
+
+        return {"policy_loss": policy_loss.item(), "value_loss": value_loss, "entropy_loss": entropy_loss.mean().item(),
+                "batch_reward": batch_reward.item(), "success_times": success_times.item(),}
+    
+    def update_multienv(self, rb: OnlineReplayBuffer, ):
+
+        c = self.loss_cfg
+    
+        batch = rb.sample_all()
+        obss, acts, rews, dones, old_log_probs, old_state_values, final_values, next_value, next_done = to_torch(batch, self.device)
+        
+        assert obss.shape[0] == acts.shape[0] == rews.shape[0] == dones.shape[0] == old_log_probs.shape[0] == old_state_values.shape[0]
+        num_steps = obss.shape[0]
+
+        batch_reward = rews.sum() 
+        success_times = batch_reward - (-rb.capacity)
+        
+        value_losses = []
+
+        with torch.no_grad():
+            advantages = torch.zeros_like(rews).to(self.device)
+            lastgaelam = 0
+            for t in reversed(range(num_steps)):
+                if t == num_steps - 1:
+                    next_not_done = 1.0 - next_done
+                    nextvalues = next_value
+                else:
+                    next_not_done = 1.0 - dones[t + 1]
+                    nextvalues = old_state_values[t + 1]
+                # real_next_values = nextvalues
+                real_next_values = next_not_done * nextvalues + final_values[t] # t instead of t+1
+                # next_not_done means nextvalues is computed from the correct next_obs
+                # if next_not_done is 1, final_values is always 0, real_next_values=final_values
+                # if next_not_done is 0, then use final_values, which is computed according to bootstrap_at_done
+               
+                delta = rews[t] + 0.99 * real_next_values - old_state_values[t]
+                advantages[t] = lastgaelam = delta + 0.99 * self.gae_lambda * next_not_done * lastgaelam # Here actually we should use next_not_terminated, but we don't have lastgamlam if terminated
+            returns = advantages + old_state_values
+
+        # flatten the batch
+        b_obs = obss.reshape((-1,) + (3,128,128))
+        if self.fix_encoder:
+            with torch.no_grad():
+                b_obs = self.encoder(b_obs).flatten(start_dim=1)
+        else:
+            b_obs = self.encoder(b_obs).flatten(start_dim=1)
+
+        b_logprobs = old_log_probs.reshape((-1,) + (8,))
+        b_actions = acts.reshape((-1,) + (8,))
+        b_advantages = advantages.reshape(-1)
+        b_advantages = (b_advantages - b_advantages.mean()) / (b_advantages.std() + 1e-10)
+        b_returns = returns.reshape(-1)
+        b_values = old_state_values.reshape(-1)
+
+        b_inds = np.arange(rb.capacity)
+        clipfracs = []
+
+        batch_size = rb.capacity
+        mini_batch_size = self.mini_batch_size
+
+        for epoch in range(self.K_epochs):
+            np.random.shuffle(b_inds)
+            for start in range(0, batch_size, mini_batch_size):
+                end = start + mini_batch_size
+                mb_inds = b_inds[start:end]
+
+                # _, newlogprob, newvalue = self.predict_act(b_obs[mb_inds], )
+                # logratio = newlogprob - b_logprobs[mb_inds]
+                # ratio = logratio.exp()
+                dist = self.actor.get_dist(b_obs[mb_inds])
+                newlogprob = dist.log_prob(b_actions[mb_inds])
+                logratio = newlogprob.sum(1) - b_logprobs[mb_inds].sum(1).detach()
+                ratio = torch.exp(logratio)
+
+                with torch.no_grad():
+                    # calculate approx_kl http://joschu.net/blog/kl-approx.html
+                    old_approx_kl = (-logratio).mean()
+                    approx_kl = ((ratio - 1) - logratio).mean()
+                    clipfracs += [((ratio - 1.0).abs() > self.clip_param).float().mean().item()]
+
+                mb_advantages = b_advantages[mb_inds]
+
+                if approx_kl > self.target_kl:
+                    break
+
+                # Policy loss
+                pg_loss1 = -mb_advantages * ratio
+                pg_loss2 = -mb_advantages * torch.clamp(ratio, 1 - self.clip_param, 1 + self.clip_param)
+                pg_loss = torch.max(pg_loss1, pg_loss2).mean()
+
+                # Value loss
+                newvalue = self.value(b_obs[mb_inds])
+                newvalue = newvalue.view(-1)
+
+                if self.clip_vloss:
+                    v_loss_unclipped = (newvalue - b_returns[mb_inds]) ** 2
+                    v_clipped = b_values[mb_inds] + torch.clamp(newvalue - b_values[mb_inds], -self.clip_param, self.clip_param)
+                    v_loss_clipped = (v_clipped - b_returns[mb_inds]) ** 2
+                    v_loss = 0.5 * torch.max(v_loss_unclipped, v_loss_clipped).mean()
+                else:
+                    v_loss = 0.5 * ((newvalue - b_returns[mb_inds]) ** 2).mean()
+
+                value_losses.append(v_loss.item())
+
+                loss = pg_loss + v_loss * 0.5
+
+                self.optim.zero_grad()
+                loss.backward()
+                nn.utils.clip_grad_norm_(self.actor.parameters(), self.max_grad_norm)
+                nn.utils.clip_grad_norm_(self.value.parameters(), self.max_grad_norm)
+                nn.utils.clip_grad_norm_(self.encoder.parameters(), self.max_grad_norm)
+                self.optim.step()
+
+            # if approx_kl > self.target_kl:
+            #     break
+        import pdb; pdb.set_trace()
+
+        return {"policy_loss": pg_loss.item(), "value_loss": v_loss,
+                "approx_kl": approx_kl.item(), 
+                "clipfracs": np.mean(clipfracs),
+                "batch_reward": batch_reward.item(), 
+                "success_times": success_times.item(),} 
+    
+
+    
     def set_old_policy(self):
         # if self.use_bc:
         #     pass
         # else:
         self.old_actor = deepcopy(self.actor)
         self.old_actor.requires_grad_(False)
-        
-    # def lr_decay(self, step, max_step):
-    #     lr = self.online_lr * (1 - step / max_step)
-    #     for p in self.actor_optim.param_groups:
-    #         p['lr'] = lr 
-    #     if hasattr(self, 'critic_optim'):
-    #         for p in self.critic_optim.param_groups:
-    #             p['lr'] = lr
-    #     else:
-    #         for p in self.critic._v_optimizer.param_groups:
-    #             p['lr'] = lr
-    #         for p in self.critic._q_optimizer.param_groups:
-    #             p['lr'] = lr
 
 class PPOAgent(BaseAgent):
     def __init__(

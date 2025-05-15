@@ -1,0 +1,16 @@
+train:
+  id: ${task}
+  num_envs: 1
+  size: ${img_size}
+  partial_reset: True
+  reconfiguration_freq: null
+  max_episode_steps: 30
+
+
+test:
+  id: ${task}
+  size: ${img_size}
+  num_envs: 1
+  partial_reset: True
+  reconfiguration_freq: 1
+

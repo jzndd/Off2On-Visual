@@ -32,7 +32,14 @@ trainer.save_eval_data()            # save test data (包括了 raw data 和 ima
 ### ppo
 #### for metaworld
 ```bash
-python main2D.py common.devices=[0] seed=4000 ac_type=ppo actor_critic.training.batch_size=2048 agent.ppo_cfg.mini_batch_size=64 task=door-lock-v2 agent.ppo_cfg.adv_compute_mode=iql2gae agent.actor_critic_cfg.online_lr=3e-6 is_whole_traj=False
+python main2D.py common.devices=[0] seed=1000 ac_type=ppo agent.ppo_cfg.adv_compute_mode=iql2gae agent.actor_critic_cfg.online_lr=3e-6 is_whole_traj=False
+```
+
+#### for maniskill
+```bash
+python main2D_maniskill.py common.devices=[4] seed=1000 ac_type=ppo is_whole_traj=False img_size=128 env=maniskill agent.ppo_cfg.adv_compute_mode=gae
+
+python main2D_maniskill_v2.py common.devices=[7] seed=1000 ac_type=ppo is_whole_traj=False img_size=128 env=maniskill agent.ppo_cfg.adv_compute_mode=gae2  actor_critic.training.batch_size=12800  env.train.num_envs=256 agent.ppo_cfg.mini_batch_size=256
 ```
 
 ### vrl3 
@@ -62,7 +69,10 @@ python main2D_offpolicy_v2.py common.devices=[0] seed=100 ac_type=rlpd task=door
 python main2D_offpolicy_v2.py common.devices=[1] seed=100 ac_type=rlpd task=door-lock-v2 actor_critic.training.batch_size=256 train_with_bc=False is_sparse_reward=True agent.actor_critic_cfg.online_lr=1e-4 frame_stack=1 agent.drqv2_cfg.offline_data_ratio=0.5
 
 ## frame_stack=1, use_whole_traj=False
-python main2D_offpolicy_v2.py common.devices=[1] seed=100 ac_type=rlpd task=door-lock-v2 actor_critic.training.batch_size=256 train_with_bc=False is_sparse_reward=True agent.actor_critic_cfg.online_lr=1e-4 frame_stack=1 agent.drqv2_cfg.offline_data_ratio=0.5 is_whole_traj=False
+python main2D_offpolicy_v2.py common.devices=[2] seed=100 ac_type=rlpd task=door-lock-v2 actor_critic.training.batch_size=256 train_with_bc=False is_sparse_reward=True agent.actor_critic_cfg.online_lr=1e-4 frame_stack=1 agent.drqv2_cfg.offline_data_ratio=0.5 is_whole_traj=False
+
+python main2D_offpolicy_v2.py common.devices=[3] seed=100 ac_type=rlpd task=handle-pull-side-v2 actor_critic.training.batch_size=256 train_with_bc=False is_sparse_reward=True agent.actor_critic_cfg.online_lr=1e-4 frame_stack=1 agent.drqv2_cfg.offline_data_ratio=0.5 is_whole_traj=False
+
 
 # DrQv2 (dense reward + no_offline_data)
 python main2D_offpolicy_v2.py common.devices=[2] common.seed=100 ac_type=drqv2 task=door-lock-v2 actor_critic.training.batch_size=256 train_with_bc=False is_sparse_reward=False agent.actor_critic_cfg.online_lr=1e-4 agent.drqv2_cfg.offline_data_ratio=0
@@ -89,3 +99,6 @@ python main2D_offpolicy_v2.py common.devices=[0] common.seed=10 ac_type=drqv2off
 ```bash
 python main2D_offpolicy_v2.py common.devices=[1] seed=100 ac_type=cp3er task=door-lock-v2 actor_critic.training.batch_size=512 train_with_bc=False is_sparse_reward=True agent.actor_critic_cfg.online_lr=1e-4 frame_stack=1 agent.drqv2_cfg.offline_data_ratio=0.5 is_whole_traj=False
 ```
+
+
+

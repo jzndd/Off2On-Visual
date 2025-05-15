@@ -106,7 +106,7 @@ class DrQv2Agent(BaseAgent):
         action_dim = cfg.num_actions
         lr=1e-4
         self.ac_type = "vrl3"
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.device = "cuda"
         self.stage = 2
         # ------------------------- set default values end ------------------------
 
@@ -189,6 +189,7 @@ class DrQv2Agent(BaseAgent):
         self.stage = 3
 
     def update(self, rb, step, expertrb):
+    # def update(self, batch, step):
         # for stage 2 and 3, we use the same functions but with different hyperparameters
         assert self.stage in (2, 3)
         metrics = dict()
@@ -199,7 +200,7 @@ class DrQv2Agent(BaseAgent):
         if self.stage == 2:
             bc_weight = self.bc_weight
             utd_ratio = 1
-            batch = expertrb.sample(mini_batch_size=self.mini_batch_size)
+            # batch = expertrb.sample(mini_batch_size=self.mini_batch_size)
 
             update_encoder = self.stage2_update_encoder
             stddev = self.stage2_std
@@ -211,8 +212,10 @@ class DrQv2Agent(BaseAgent):
 
             if self.offline_data_ratio > 0:
                 utd_ratio = self.utd_ratio
-                collect_batch = rb.sample(mini_batch_size=self.mini_batch_size * self.utd_ratio * (1-self.offline_data_ratio))
-                expert_batch = expertrb.sample(mini_batch_size=self.mini_batch_size * self.utd_ratio * self.offline_data_ratio)
+                collect_batch = next(rb)
+                expert_batch = next(expertrb)
+                # collect_batch = rb.sample(mini_batch_size=self.mini_batch_size * self.utd_ratio * (1-self.offline_data_ratio))
+                # expert_batch = expertrb.sample(mini_batch_size=self.mini_batch_size * self.utd_ratio * self.offline_data_ratio)
                 batch = merge_batches(collect_batch, expert_batch)
             else:
                 utd_ratio = 1

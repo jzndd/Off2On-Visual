@@ -7,11 +7,11 @@ os.environ["MUJOCO_GL"] = "egl"
 
 
 def run(cfg, root_dir):
-    from trainer2D_offpolicy_v2 import Trainer
+    from trainer2D_maniskill_v2 import Trainer
     trainer = Trainer(cfg, root_dir)
     trainer.run()
 
-@hydra.main(config_path="config/", config_name="trainer2D", version_base="1.3")
+@hydra.main(config_path="config/", config_name="trainer2D_maniskill", version_base="1.3")
 def main(cfg: DictConfig) -> None:
     setup_visible_cuda_devices(cfg.common.devices)
     root_dir = Path(hydra.utils.get_original_cwd())
@@ -20,24 +20,19 @@ def main(cfg: DictConfig) -> None:
         cfg.wandb.mode = "disabled"         # If debug mode, disable use of wandb
         cfg.collection.train.first_epoch.min = 1500
         # For ActionModel
-        cfg.actor_critic.training.batch_size = 256
         cfg.actor_critic.training.steps_per_epoch = 10
         cfg.actor_critic.training.steps_first_epoch = 10
-        # for ppo
+        #
         cfg.training.bc_actor_warmup_steps = 10
         cfg.training.bc_critic_warmup_steps = 10
-
-        # for vrl3
-        cfg.training.online_max_iter=10000
-        cfg.training.offline_steps = 50
-
-        cfg.num_until_update = 2000
         # cfg.training.online_max_iter = 2000
-        # cfg.evaluation.every_iter = 1000
-        # cfg.evaluation.eval_times = 1
+        cfg.evaluation.every_iter = 2000
+        cfg.evaluation.eval_times = 5
+    cfg.training.online_max_iter = 5000000
+    cfg.agent.ppo_cfg.mini_batch_size
 
-    # if cfg.only_bc:
-    #     cfg.wandb.mode = "disabled"         # If debug mode, disable use of wandb
+    if cfg.only_bc:
+        cfg.wandb.mode = "disabled"         # If debug mode, disable use of wandb
     
     if not cfg.save_data:
         if not cfg.is_sparse_reward:
@@ -45,7 +40,6 @@ def main(cfg: DictConfig) -> None:
         run(cfg, root_dir)
     else:
         cfg.wandb.mode = "disabled"
-        from trainer2D_offpolicy_v2 import Trainer
         trainer = Trainer(cfg, root_dir)
         trainer.save_data()
         trainer.save_eval_data()

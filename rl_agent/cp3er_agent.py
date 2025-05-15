@@ -158,7 +158,8 @@ class CP3ERAgent(BaseAgent):
     def bc_transfer_ac(self):
         self.stage = 3
 
-    def update(self, rb, step, expertrb):
+    # def update(self, rb, step, expertrb):
+    def update(self, batch, step):
         # for stage 2 and 3, we use the same functions but with different hyperparameters
         assert self.stage in (2, 3)
         metrics = dict()
@@ -169,20 +170,20 @@ class CP3ERAgent(BaseAgent):
         if self.stage == 2:
             bc_weight = self.bc_weight
             utd_ratio = 1
-            batch = expertrb.sample(mini_batch_size=self.mini_batch_size)
+            # batch = expertrb.sample(mini_batch_size=self.mini_batch_size)
 
             update_encoder = self.stage2_update_encoder
 
         elif self.stage == 3:
             bc_weight = self.bc_weight
-            if self.offline_data_ratio > 0:
-                utd_ratio = self.utd_ratio
-                collect_batch = rb.sample(mini_batch_size=self.mini_batch_size * self.utd_ratio * (1-self.offline_data_ratio))
-                expert_batch = expertrb.sample(mini_batch_size=self.mini_batch_size * self.utd_ratio * self.offline_data_ratio)
-                batch = merge_batches(collect_batch, expert_batch)
-            else:
-                utd_ratio = 1
-                batch = rb.sample(mini_batch_size=self.mini_batch_size)
+            # if self.offline_data_ratio > 0:
+            #     utd_ratio = self.utd_ratio
+            #     collect_batch = rb.sample(mini_batch_size=self.mini_batch_size * self.utd_ratio * (1-self.offline_data_ratio))
+            #     expert_batch = expertrb.sample(mini_batch_size=self.mini_batch_size * self.utd_ratio * self.offline_data_ratio)
+            #     batch = merge_batches(collect_batch, expert_batch)
+            # else:
+            #     utd_ratio = 1
+            #     batch = rb.sample(mini_batch_size=self.mini_batch_size)
 
             update_encoder = self.stage3_update_encoder
 

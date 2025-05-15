@@ -42,7 +42,7 @@ def make_mw_env(
         return env
 
     # TODO: AsyncVectorEnv IN metaworld ?
-    env = AsyncVectorEnv([env_fn for _ in range(num_envs)])
+    env = SyncVectorEnv([env_fn for _ in range(num_envs)])
     # env = env_fn()
 
     env = TorchEnv(env, device)

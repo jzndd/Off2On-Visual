@@ -1,11 +1,11 @@
 defaults:
   - _self_
-  - env: metaworld
+  - env: maniskill
   - agent: metaworld
 
 debug_mode: false
 seed: 0
-task: handle-pull-side-v2
+task: PushCube-v1
 
 use_trunk: True          ## can not be modified !!!!!!!!!!!!
 
@@ -85,9 +85,9 @@ training:
 
 evaluation:
   should: True
-  every: 5
-  every_iter: 20000
-  eval_times: 25
+  every: 20
+  every_iter: 100000
+  eval_times: 100
 
 actor_critic:
   training:
@@ -106,7 +106,7 @@ actor_critic:
     gamma: 0.985
     lambda_: 0.95
     weight_value_loss: 1.0
-    weight_entropy_loss: 0.01
+    weight_entropy_loss: 0.0
     weight_bc_loss: 0.1
     is_continuous_action: true
 

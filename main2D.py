@@ -1,16 +1,13 @@
 import os
 from pathlib import Path
 from typing import List, Union
-from mw_wrapper import TorchEnv, make_mw_env
-import torch
 from omegaconf import DictConfig, OmegaConf
 import hydra
-# from trainer2D_float import Trainer
-from trainer2D import Trainer
 os.environ["MUJOCO_GL"] = "egl"
 
 
 def run(cfg, root_dir):
+    from trainer2D import Trainer
     trainer = Trainer(cfg, root_dir)
     trainer.run()
 
@@ -32,6 +29,7 @@ def main(cfg: DictConfig) -> None:
         # cfg.training.online_max_iter = 2000
         # cfg.evaluation.every_iter = 1000
         # cfg.evaluation.eval_times = 1
+    cfg.training.online_max_iter = 4000000
 
     if cfg.only_bc:
         cfg.wandb.mode = "disabled"         # If debug mode, disable use of wandb
@@ -42,6 +40,7 @@ def main(cfg: DictConfig) -> None:
         run(cfg, root_dir)
     else:
         cfg.wandb.mode = "disabled"
+        from trainer2D import Trainer
         trainer = Trainer(cfg, root_dir)
         trainer.save_data()
         trainer.save_eval_data()
