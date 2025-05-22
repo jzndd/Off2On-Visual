@@ -222,27 +222,6 @@ class TorchEnv(gymnasium.Wrapper):
     def step(self, actions: Tensor) -> Tuple[Tensor, Tensor, Tensor, Tensor, Dict[str, Any]]:
         # actions: B x Da (B is the number of envs, Da = 4 in the case of metaworld)
         obs, rew, end, trunc, info = self.env.step(actions.cpu().numpy())
-
-        dead = np.logical_or(end, trunc)
-        if dead.any():
-            info["final_observation"] = deepcopy(obs)
-            info["final_observation"] = self._to_tensor(np.stack(info["final_observation"][dead]))
-
-            # reset_ids = np.where(dead)[0]
-            # for i in reset_ids:
-            #     self.env.envs[i].reset_async()
-            # reset_obs_list = [self.env.envs[i].reset_wait()[0] for i in reset_ids]
-
-            # for i, new_obs in zip(reset_ids, reset_obs_list):
-            #     obs[i] = new_obs
-
-            # info["reset_env_ids"] = reset_ids.tolist()
-
-            # reset_obs, reset_info = self.env.reset_done()
-            # obs[dead] = reset_obs  # 替换 obs 中的 done 部分
-
-            # if "reset_env_ids" not in info:
-            #     info["reset_env_ids"] = np.where(dead)[0].tolist()
         obs, rew, end, trunc = (self._to_tensor(x) for x in (obs, rew, end, trunc))
         return obs, rew, end, trunc, info
 

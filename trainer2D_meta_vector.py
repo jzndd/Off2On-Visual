@@ -131,83 +131,64 @@ class Trainer:
         obs, _ = train_env.reset(seed=[random.randint(0, 2**31 - 1) for _ in range(num_envs)])
         done = torch.zeros((num_envs, ), device=self._device)
         epoch = 0
-
-        while self.iter < max_iter:
-
-            # -----------------------------   2-stage params update   -----------------------------
-            obs, _ = train_env.reset()
-            done = False
-            eps_rew = 0
-            step = 0
-
             # 2 stage : ac update
             # end_traj_flag = False
             # while not done:
-            while self.iter < max_iter:
+        while self.iter < max_iter:
 
-                epoch += 1
+            epoch += 1
 
-                for step in range(singe_batch_iter):
-                    self.iter += num_envs
-                    with torch.no_grad():
-                        real_act_tuple = self.agent.predict_act(obs)
-                        if isinstance(real_act_tuple, Tuple):
-                            real_act = real_act_tuple[0]
-                            old_log_prob = real_act_tuple[1]
-                            if len(real_act_tuple) == 3:
-                                state_value = real_act_tuple[2]
-                                state_value = state_value.view(-1)
-                            else:
-                                state_value = None
-                        else:
-                            real_act = real_act_tuple
-                            old_log_prob = None
+            for step in range(singe_batch_iter):
+                self.iter += num_envs
+                with torch.no_grad():
+                    real_act, old_log_prob, state_value= self.agent.predict_act(obs)
+                    state_value = state_value.view(-1)
 
-                        next_obs, rew, terminated, trunc, info = train_env.step(real_act)
+                    next_obs, rew, terminated, trunc, info = train_env.step(real_act)
 
-                        if self._cfg.is_sparse_reward:
-                            rew = torch.tensor(info['success'], device=self._device, dtype=torch.float32)
-                            if "final_info" in info:
-                                final_rew = [f["success"] if f is not None else 0.0 for f in info["final_info"]]
-                                rew += torch.tensor(final_rew, device=self._device, dtype=torch.float32)
-                            rew = rew.clamp(0, 1)
+                    if self._cfg.is_sparse_reward:
+                        rew = torch.tensor(info['success'], device=self._device, dtype=torch.float32)
+                        if "final_info" in info.keys():
+                            final_rew = [f["success"] if f is not None else 0.0 for f in info["final_info"]]
+                            rew += torch.tensor(final_rew, device=self._device, dtype=torch.float32)
+                        rew = rew.clamp(0, 1)
 
-                            if not self._cfg.is_whole_traj:
-                                rew = rew - 1
+                        if not self._cfg.is_whole_traj:
+                            rew = rew - 1
 
-                        # if not self._cfg.is_whole_traj:
-                        #     success_flag = rew + 1
+                    # if not self._cfg.is_whole_traj:
+                    #     success_flag = rew + 1
 
-                        rew = rew.view(-1)
-                        done = torch.logical_or(terminated, trunc).to(dtype=torch.uint8)
+                    rew = rew.view(-1)
+                    done = torch.logical_or(terminated, trunc).to(dtype=torch.uint8)
 
-                        # done = torch.logical_or(done, success_flag).to(dtype=torch.uint8)
+                    # done = torch.logical_or(done, success_flag).to(dtype=torch.uint8)
 
-                        rb.store(step, obs, rew, next_obs, done, real_act, old_log_prob, state_value)
-                        # rerference: https://github.com/Lizhi-sjtu/DRL-code-pytorch/blob/8f767b99ad44990b49f6acf3159660c5594db77e/5.PPO-continuous/PPO_continuous_main.py#L100
-                
-                        obs = next_obs
-                
-                print(" ---------------------- begin update {} ------------------".format(self.iter))
-                metrics = self.agent.update_vector(rb, )
-                print("the batch reward is {}, and success times is {}".format(metrics["batch_reward"], metrics["success_times"]))
-                _to_log = []
-                _to_log.append(metrics)
-                _to_log = [{f"actor_critic/train/{k}": v for k, v in d.items()} for d in _to_log]
-                to_log += _to_log
-
+                    rb.store(step, obs, rew, next_obs, done, real_act, old_log_prob, state_value)
+                    # rerference: https://github.com/Lizhi-sjtu/DRL-code-pytorch/blob/8f767b99ad44990b49f6acf3159660c5594db77e/5.PPO-continuous/PPO_continuous_main.py#L100
             
-                # ------------------------------------ should test ? ---------------------------------
+                    obs = next_obs
+            
+            print(" ---------------------- begin update {} ------------------".format(self.iter))
+            metrics = self.agent.update_vector(rb, )
+            print("the batch reward is {}, and success times is {}".format(metrics["batch_reward"], metrics["success_times"]))
+            _to_log = []
+            _to_log.append(metrics)
+            _to_log = [{f"actor_critic/train/{k}": v for k, v in d.items()} for d in _to_log]
+            to_log += _to_log
 
-                should_test = self._cfg.evaluation.should and (self.iter % self._cfg.evaluation.every_iter == 0)
-                if should_test:
-                    print("begin test")
-                    to_log += self.test_actor_critic(self._cfg.evaluation.eval_times)
+        
+            # ------------------------------------ should test ? ---------------------------------
 
-                # ------------------------------------ wandb log ---------------------------------
+            should_test = self._cfg.evaluation.should and (self.iter % self._cfg.evaluation.every_iter == 0)
+            if should_test:
+                print("begin test")
+                to_log += self.test_actor_critic(self._cfg.evaluation.eval_times)
 
-                wandb_log(to_log, self.iter)
-                to_log = []
+            # ------------------------------------ wandb log ---------------------------------
+
+            wandb_log(to_log, self.iter)
+            to_log = []
 
     @torch.no_grad()
     def test_actor_critic(self, eval_times=25):
