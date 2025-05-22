@@ -20,7 +20,6 @@ import os
 import cv2
 os.environ["MUJOCO_GL"] = "egl"
 
-
 def make_mw_env(
     id: str,
     num_envs: int,
@@ -42,7 +41,7 @@ def make_mw_env(
         return env
 
     # TODO: AsyncVectorEnv IN metaworld ?
-    env = SyncVectorEnv([env_fn for _ in range(num_envs)])
+    env = AsyncVectorEnv([env_fn for _ in range(num_envs)])
     # env = env_fn()
 
     env = TorchEnv(env, device)
@@ -54,7 +53,7 @@ class MetaWorldEnv(gymnasium.Env):
 
     def __init__(self, task, frame_skip: int, device="cuda:0", 
                  screen_size=128, max_episode_steps=100,
-                 is_sparse_reward=False, frame_stack=1):
+                 is_sparse_reward=True, frame_stack=1):
         super(MetaWorldEnv, self).__init__()
 
         # init params
@@ -133,12 +132,11 @@ class MetaWorldEnv(gymnasium.Env):
             if self.is_sparse_reward:
                 total_reward = 1.0 if info["success"] else 0.0
             self.game_over = terminated
-            # if self.ale.lives() < self.lives:
-            #     life_loss = True
-            #     self.lives = self.ale.lives()
+
+            if info["success"]:
+                terminated = 1.0
 
             if terminated or truncated:
-                self.env.reset()
                 break
 
             # if t == self.frame_skip - 2:
@@ -229,7 +227,22 @@ class TorchEnv(gymnasium.Wrapper):
         if dead.any():
             info["final_observation"] = deepcopy(obs)
             info["final_observation"] = self._to_tensor(np.stack(info["final_observation"][dead]))
-        # import pdb; pdb.set_trace()
+
+            # reset_ids = np.where(dead)[0]
+            # for i in reset_ids:
+            #     self.env.envs[i].reset_async()
+            # reset_obs_list = [self.env.envs[i].reset_wait()[0] for i in reset_ids]
+
+            # for i, new_obs in zip(reset_ids, reset_obs_list):
+            #     obs[i] = new_obs
+
+            # info["reset_env_ids"] = reset_ids.tolist()
+
+            # reset_obs, reset_info = self.env.reset_done()
+            # obs[dead] = reset_obs  # 替换 obs 中的 done 部分
+
+            # if "reset_env_ids" not in info:
+            #     info["reset_env_ids"] = np.where(dead)[0].tolist()
         obs, rew, end, trunc = (self._to_tensor(x) for x in (obs, rew, end, trunc))
         return obs, rew, end, trunc, info
 
@@ -245,24 +258,30 @@ class TorchEnv(gymnasium.Wrapper):
 if __name__ == "__main__":
 
     device = torch.device("cuda:1")
-    mw_env = make_mw_env("button-press-topdown-v2", 1, device, 128, frame_stack=3)
+    mw_env = make_mw_env("button-press-topdown-v2", 10, device, 128, frame_stack=1)
     obs, info = mw_env.reset()
-    while(1):
-        action = torch.rand((1, 4))
+
+    from mujoco import get_gl_backend
+    print("GL Backend in use:", get_gl_backend())  # 要看到 "EGL"
+    exit(1)
+    step = 0
+    traj = 0
+    for i in range(120):
+        action = torch.rand((10, 4))
         obs, rew, end, trunc, loop_info = mw_env.step(action)
+        step += 1
         if end.any() or trunc.any():
-            print("end")
-            break
-    print("info", loop_info['success'])
+            traj += (end.sum() + trunc.sum())
     print("end", end)
     print("trunc", trunc)
     print("obs", obs.shape)
+    print("traj", traj) 
 
     # print(obs.shape)
     # obs_np = obs[ :, :, -3:].add(1).div(2).mul(255).byte().permute(2,0,1).cpu().numpy()
-    obs_np = obs[0, -3:, :, :].add(1).div(2).mul(255).byte().permute(1,2,0).cpu().numpy()
-    import matplotlib.pyplot as plt
-    plt.imshow(obs_np, cmap='viridis')  # Adjust cmap based on your data
-    plt.colorbar()
-    plt.title("Observation")
-    plt.savefig("observation.png")
+    # obs_np = obs[0, -3:, :, :].add(1).div(2).mul(255).byte().permute(1,2,0).cpu().numpy()
+    # import matplotlib.pyplot as plt
+    # plt.imshow(obs_np, cmap='viridis')  # Adjust cmap based on your data
+    # plt.colorbar()
+    # plt.title("Observation")
+    # plt.savefig("observation.png")

@@ -138,6 +138,7 @@ class Trainer:
         while self.iter < max_iter:
 
             epoch += 1
+            final_values = torch.zeros((singe_batch_iter, num_envs), device=self._device)
 
             for step in range(singe_batch_iter):
                 self.iter += num_envs
@@ -162,7 +163,7 @@ class Trainer:
                             rew = info['success'].detach().to(device=self._device, dtype=torch.float32)
                         else:
                             rew = torch.tensor(info['success'], device=self._device, dtype=torch.float32)
-                            
+
                         if 'final_info' in info.keys():
                             if isinstance(info['final_info']['success'], torch.Tensor):
                                 rew = info['final_info']['success'].detach().to(device=self._device, dtype=torch.float32)
@@ -175,9 +176,21 @@ class Trainer:
                     rew = rew.view(-1)
                     done = torch.logical_or(terminated, trunc).to(dtype=torch.uint8)
                     rb.store(step, obs, rew, next_obs, done, real_act, old_log_prob, state_value)
+
+                    if "final_info" in info:
+                        done_mask = info["_final_info"].to(self._device)
+                        info["final_observation"] = info["final_observation"].to(self._device)
+                        info["final_observation"] = info["final_observation"][done_mask]
+
+                        # for k in info["final_observation"]:
+                        #     info["final_observation"][k] = info["final_observation"][k][done_mask]
+                        with torch.no_grad():
+                            final_values[step, torch.arange(num_envs, device=self._device)[done_mask]] = self.agent.get_value(info["final_observation"]).view(-1)
                     # rerference: https://github.com/Lizhi-sjtu/DRL-code-pytorch/blob/8f767b99ad44990b49f6acf3159660c5594db77e/5.PPO-continuous/PPO_continuous_main.py#L100
             
                     obs = next_obs
+
+            rb.final_values = final_values
                 
             print(" ---------------------- begin update {} ------------------".format(self.iter))
             metrics = self.agent.update_vector(rb, )
@@ -194,8 +207,8 @@ class Trainer:
                 to_log += self.test_actor_critic(self._cfg.evaluation.eval_times)
                 # ------------------------------------ wandb log ---------------------------------
 
-                wandb_log(to_log, self.iter)
-                to_log = []
+            wandb_log(to_log, self.iter)
+            to_log = []
 
     @torch.no_grad()
     def test_actor_critic(self, eval_times=25):

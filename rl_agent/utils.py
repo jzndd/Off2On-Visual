@@ -500,6 +500,8 @@ class VectorOnlineReplayBuffer:
         self.old_log_prob = torch.zeros((single_envs_step, num_envs, *action_shape), dtype=torch.float32)
         self.state_value = torch.zeros((single_envs_step, num_envs, ), dtype=torch.float32)
 
+        self.final_values = torch.zeros((single_envs_step, num_envs), dtype=torch.float32)
+
     def store(self, step, obs, rew, obs_, done, act, old_log_prob, state_value):
         """
         Stores a transition in the buffer.
@@ -528,8 +530,8 @@ class VectorOnlineReplayBuffer:
         Returns all the transitions stored in the buffer.
         return obs, act, rew, next_obs, done, old_log_prob, state_value, dw
         """
-        
         return self.obs, self.act, self.rew, self.obs_ , self.done, self.old_log_prob, self.state_value
+        # return self.obs, self.act, self.rew, self.obs_ , self.done, self.old_log_prob, self.state_value, self.final_values
 
 
 class OfflineReplaybuffer:

@@ -176,20 +176,6 @@ class PPOAgent2D(BaseAgent):
     
     def bc_transfer_ac(self):
 
-        # if self.ppo_cfg.use_adam_eps:
-        #     self.actor_optim = optim.Adam(self.actor.parameters(), lr=self.online_lr, eps=1e-5)
-        # else:
-        #     self.actor_optim = optim.Adam(self.actor.parameters(), lr=self.online_lr)
-
-        # if self.adv_compute_mode in ['tradition', 'q-v', 'gae']:
-        #     del self.value_optim
-        #     params_list = list(self.value.parameters())
-        #     if self.adv_compute_mode == 'q-v':
-        #         del self.doubleq_optim
-        #         params_list += list(self.doubleq.parameters())
-        #     self.critic_optim = optim.Adam(params_list, lr=self.online_lr, eps=1e-5)
-        # elif self.adv_compute_mode == 'iql':
-        #     self.critic.transbc2online(self.online_lr)
         del self.actor_optim
         
         if hasattr(self, 'value_optim'):
@@ -384,7 +370,6 @@ class PPOAgent2D(BaseAgent):
     
         batch = rb.sample_all()
         obss, acts, rews, next_obss, dones, old_log_probs, old_state_value = to_torch(batch, self.device)
-
         # obs shape
         # obss: (num_step, num_envs, 3, 128, 128)
 
@@ -399,11 +384,14 @@ class PPOAgent2D(BaseAgent):
             for t in reversed(range(num_steps)):
                 nextnonterminal = 1.0 - dones[t]
                 if t == num_steps - 1:
-                    next_value = self.get_value(next_obss[t]).view(-1)
+                    next_value = self.get_value(next_obss[t]).reshape(1, -1)
                 else:
                     next_value = old_state_value[t + 1]
 
-                delta = rews[t] + 0.99 * next_value * nextnonterminal - old_state_value[t]
+                real_next_values = nextnonterminal * next_value
+                # real_next_values = nextnonterminal * next_value + final_values[t] # t instead of t+1
+
+                delta = rews[t] + 0.99 * real_next_values - old_state_value[t]
                 advantages[t] = lastgaelam = delta + 0.99 * self.gae_lambda * nextnonterminal * lastgaelam
             returns = advantages + old_state_value
             # advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-10)
@@ -432,7 +420,7 @@ class PPOAgent2D(BaseAgent):
                 dist = self.actor.get_dist(b_obs[index])
                 log_prob = dist.log_prob(b_actions[index])
 
-                state_value = self.value(b_obs[index])
+                state_value = self.value(b_obs[index]).view(-1)
                 if self.clip_vloss:
                     v_loss_unclipped = (state_value- b_returns[index]) ** 2
                     v_clipped = b_values[index] + torch.clamp(state_value - b_values[index], -self.clip_param, self.clip_param)
@@ -482,7 +470,8 @@ class PPOAgent2D(BaseAgent):
         c = self.loss_cfg
     
         batch = rb.sample_all()
-        obss, acts, rews, dones, old_log_probs, old_state_values, final_values, next_value, next_done = to_torch(batch, self.device)
+        obss, acts, rews, dones, old_log_probs, old_state_values, final_values, next_value,  = to_torch(batch, self.device)
+        # obss, acts, rews, dones, old_log_probs, old_state_values, final_values, next_value, next_done = to_torch(batch, self.device)
         
         assert obss.shape[0] == acts.shape[0] == rews.shape[0] == dones.shape[0] == old_log_probs.shape[0] == old_state_values.shape[0]
         num_steps = obss.shape[0]
@@ -496,13 +485,19 @@ class PPOAgent2D(BaseAgent):
             advantages = torch.zeros_like(rews).to(self.device)
             lastgaelam = 0
             for t in reversed(range(num_steps)):
+                next_not_done = 1.0 - dones[t]
                 if t == num_steps - 1:
-                    next_not_done = 1.0 - next_done
                     nextvalues = next_value
                 else:
-                    next_not_done = 1.0 - dones[t + 1]
                     nextvalues = old_state_values[t + 1]
-                # real_next_values = nextvalues
+
+                # if t == num_steps - 1:
+                #     next_not_done = 1.0 - next_done
+                #     nextvalues = next_value
+                # else:
+                #     next_not_done = 1.0 - dones[t + 1]
+                #     nextvalues = old_state_values[t + 1]
+    
                 real_next_values = next_not_done * nextvalues + final_values[t] # t instead of t+1
                 # next_not_done means nextvalues is computed from the correct next_obs
                 # if next_not_done is 1, final_values is always 0, real_next_values=final_values
@@ -586,9 +581,8 @@ class PPOAgent2D(BaseAgent):
                 nn.utils.clip_grad_norm_(self.encoder.parameters(), self.max_grad_norm)
                 self.optim.step()
 
-            # if approx_kl > self.target_kl:
-            #     break
-        import pdb; pdb.set_trace()
+            if approx_kl > self.target_kl:
+                break
 
         return {"policy_loss": pg_loss.item(), "value_loss": v_loss,
                 "approx_kl": approx_kl.item(), 

@@ -46,7 +46,7 @@ class OnlineReplayBuffer:
         # only compute at the end
         self.final_values = torch.zeros((single_envs_step, num_envs, 1), dtype=torch.float32)
         self.next_value = torch.zeros((single_envs_step, 1), dtype=torch.float32)
-        self.next_done = torch.zeros((single_envs_step, 1), dtype=torch.float32)
+        # self.next_done = torch.zeros((single_envs_step, 1), dtype=torch.float32)
         # self.dw = torch.zeros((single_envs_step, num_envs, 1), dtype=torch.float32)
 
     def store(self, step, obs, rew, done, act, old_log_prob, state_value):
@@ -81,7 +81,9 @@ class OnlineReplayBuffer:
         """
         
         return self.obs, self.act, self.rew, self.done, self.old_log_prob, \
-                self.state_value, self.final_values, self.next_value, self.next_done
+                self.state_value, self.final_values, self.next_value
+        # return self.obs, self.act, self.rew, self.done, self.old_log_prob, \
+        #         self.state_value, self.final_values, self.next_value, self.next_done
 
 
 class Trainer:
@@ -252,12 +254,14 @@ class Trainer:
 
                     rew = rew.view(-1)
 
-                    rb.store(step, obs, rew, done, real_act, 
-                             old_log_prob, state_value, )
+                    # rb.store(step, obs, rew, done, real_act, 
+                    #          old_log_prob, state_value, )
 
                     done = torch.logical_or(terminated, trunc).to(dtype=torch.uint8)
                         # rerference: https://github.com/Lizhi-sjtu/DRL-code-pytorch/blob/8f767b99ad44990b49f6acf3159660c5594db77e/5.PPO-continuous/PPO_continuous_main.py#L100
                         # dw = torch.tensor(done.bool() & (~trunc.bool()), dtype=torch.uint8, device=done.device) # loss and win but not trunc (because if loss, there is no next state)
+                    rb.store(step, obs, rew, done, real_act, 
+                             old_log_prob, state_value, )
                     
                     if "final_info" in info:
                         done_mask = info["_final_info"].to(self._device)
@@ -276,7 +280,7 @@ class Trainer:
 
             rb.final_values = final_values
             rb.next_value = next_value
-            rb.next_done = done
+            # rb.next_done = done
                 
             print(" ---------------------- begin update {} ------------------".format(self.iter))
             metrics = self.agent.update_multienv(rb, )

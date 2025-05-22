@@ -45,7 +45,7 @@ class Trainer:
         self.registered_env_func = make_mw_env
         self.domain_name = 'metaworld'
 
-        env = self.registered_env_func(num_envs=1,  device=self._device, **cfg.env.train)
+        env = self.registered_env_func(device=self._device, **cfg.env.train)
         cfg.agent.actor_critic_cfg.num_actions = deepcopy(env.num_actions)
         # cfg.agent.actor_critic_cfg.num_states = deepcopy(env.num_states)
 
@@ -71,7 +71,7 @@ class Trainer:
 
     def run(self):
         cfg = self._cfg
-        train_env = self.registered_env_func(num_envs=cfg.collection.train.num_envs, device=self._device, **cfg.env.train)
+        train_env = self.registered_env_func(device=self._device, **cfg.env.train)
     
         max_iter = self._cfg.training.online_max_iter
         bc_actor_warmup_steps = self._cfg.training.bc_actor_warmup_steps
@@ -143,63 +143,60 @@ class Trainer:
             # 2 stage : ac update
             # end_traj_flag = False
             # while not done:
-            while not done:
-                self.iter += 1
-                with torch.no_grad():
-                    real_act_tuple = self.agent.predict_act(obs)
-                    if isinstance(real_act_tuple, Tuple):
-                        real_act = real_act_tuple[0]
-                        old_log_prob = real_act_tuple[1]
-                        if len(real_act_tuple) == 3:
-                            state_value = real_act_tuple[2]
+            while self.iter < max_iter:
+
+                epoch += 1
+
+                for step in range(singe_batch_iter):
+                    self.iter += num_envs
+                    with torch.no_grad():
+                        real_act_tuple = self.agent.predict_act(obs)
+                        if isinstance(real_act_tuple, Tuple):
+                            real_act = real_act_tuple[0]
+                            old_log_prob = real_act_tuple[1]
+                            if len(real_act_tuple) == 3:
+                                state_value = real_act_tuple[2]
+                                state_value = state_value.view(-1)
+                            else:
+                                state_value = None
                         else:
-                            state_value = None
-                    else:
-                        real_act = real_act_tuple
-                        old_log_prob = None
+                            real_act = real_act_tuple
+                            old_log_prob = None
 
-                    next_obs, rew, terminated, trunc, info = train_env.step(real_act)
+                        next_obs, rew, terminated, trunc, info = train_env.step(real_act)
 
-                    if self._cfg.is_sparse_reward:
-                        rew = torch.tensor(info['success'], device=self._device, dtype=torch.float32)
-                        if not self._cfg.is_whole_traj:
-                            rew = rew - 1
+                        if self._cfg.is_sparse_reward:
+                            rew = torch.tensor(info['success'], device=self._device, dtype=torch.float32)
+                            if "final_info" in info:
+                                final_rew = [f["success"] if f is not None else 0.0 for f in info["final_info"]]
+                                rew += torch.tensor(final_rew, device=self._device, dtype=torch.float32)
+                            rew = rew.clamp(0, 1)
 
-                    step += 1
-                    eps_rew += rew
+                            if not self._cfg.is_whole_traj:
+                                rew = rew - 1
 
-                    if self.domain_name == 'metaworld':
-                        # done here means win
-                        # terminated here is always False
-                        # trunc here means time limit
-                        if not self._cfg.is_whole_traj:
-                            done = torch.tensor(info['success'], device=self._device, dtype=torch.float32)
-                        else:
-                            done = False
-                        done = done or terminated or trunc
-                        dw = torch.tensor(done.bool() & (~trunc.bool()), dtype=torch.uint8, device=done.device)
-                    else:
-                        done = terminated
+                        # if not self._cfg.is_whole_traj:
+                        #     success_flag = rew + 1
+
+                        rew = rew.view(-1)
+                        done = torch.logical_or(terminated, trunc).to(dtype=torch.uint8)
+
+                        # done = torch.logical_or(done, success_flag).to(dtype=torch.uint8)
+
+                        rb.store(step, obs, rew, next_obs, done, real_act, old_log_prob, state_value)
                         # rerference: https://github.com/Lizhi-sjtu/DRL-code-pytorch/blob/8f767b99ad44990b49f6acf3159660c5594db77e/5.PPO-continuous/PPO_continuous_main.py#L100
-                        dw = torch.tensor(done.bool() & (~trunc.bool()), dtype=torch.uint8, device=done.device) # loss and win but not trunc (because if loss, there is no next state)
-
-                    rb.store(obs, next_obs, rew, done, real_act, old_log_prob=old_log_prob, 
-                            state_value=state_value, dw=dw)
-                    
-                    obs = next_obs
-
-                # ------------------------------------ should train ? ---------------------------------
                 
-                if rb.size >= self._cfg.actor_critic.training.batch_size:
-                    print(" ---------------------- begin update {} ------------------".format(self.iter))
-                    metrics = self.agent.update(rb, self.iter, max_iter)
-                    print("the batch reward is {}, and success times is {}".format(metrics["batch_reward"], metrics["success_times"]))
-                    _to_log = []
-                    _to_log.append(metrics)
-                    _to_log = [{f"actor_critic/train/{k}": v for k, v in d.items()} for d in _to_log]
-                    to_log += _to_log
-                    rb.clear()
+                        obs = next_obs
+                
+                print(" ---------------------- begin update {} ------------------".format(self.iter))
+                metrics = self.agent.update_vector(rb, )
+                print("the batch reward is {}, and success times is {}".format(metrics["batch_reward"], metrics["success_times"]))
+                _to_log = []
+                _to_log.append(metrics)
+                _to_log = [{f"actor_critic/train/{k}": v for k, v in d.items()} for d in _to_log]
+                to_log += _to_log
 
+            
                 # ------------------------------------ should test ? ---------------------------------
 
                 should_test = self._cfg.evaluation.should and (self.iter % self._cfg.evaluation.every_iter == 0)
@@ -212,11 +209,9 @@ class Trainer:
                 wandb_log(to_log, self.iter)
                 to_log = []
 
-            # print("Current Iter is {}, this traj eps rew is {}, and the traj len is {}".format(self.iter, eps_rew, step))
-
     @torch.no_grad()
     def test_actor_critic(self, eval_times=25):
-        test_env = make_mw_env(num_envs=self._cfg.collection.test.num_envs, device=self._device, **self._cfg.env.test)
+        test_env = self.registered_env_func(device=self._device, **self._cfg.env.test)
         total_reward = 0.0
         success_rate = 0.0
         video_recorder = VideoRecorder(self._path_video_dir)
@@ -239,12 +234,13 @@ class Trainer:
                 # next_obs, rew, end, trunc, info = test_env.step(actual_act)
                 next_obs, rew, end, trunc, info = test_env.step(act)
                 video_recorder.record(next_obs)
-                # import pdb; pdb.set_trace()
-                # video_recorder.save(f"{self.epoch}.mp4")
                 steps += 1
                 total_reward += rew.sum().item()
 
                 success |= bool(info['success'])
+
+                if "final_info" in info:
+                    success |= bool(info["final_info"][0]["success"])
 
                 obs = next_obs
 
@@ -256,7 +252,6 @@ class Trainer:
 
             video_recorder.save(f"{self.iter}.mp4")
             print("the {} traj success is {} and steps is {}".format(i, success, steps))
-
 
         success_rate = success_rate / eval_times
         avg_reward = total_reward / eval_times
