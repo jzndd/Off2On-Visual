@@ -89,7 +89,7 @@ class PPOAgent2D(BaseAgent):
             if self.adv_compute_mode == 'q-v':
                 self.doubleq = DoubleQMLP(cfg, self.encoder.repr_dim, )
                 self.doubleq_optim = optim.Adam(self.doubleq.parameters(), lr=1e-4)
-        elif self.adv_compute_mode in ['iql', 'iql2gae']:
+        elif self.adv_compute_mode in ['iql', 'iql2gae', 'iql2gae2']:
             self.critic = IQLCritic(cfg, self.encoder.repr_dim,) 
         else:
             raise NotImplementedError
@@ -101,7 +101,7 @@ class PPOAgent2D(BaseAgent):
     def predict_act(self, obs: torch.Tensor, eval_mode=False, **kwargss) -> ActorCriticOutput:
         assert obs.ndim == 4  # Ensure observation shape is correct
         h = self.encoder(obs).flatten(start_dim=1)
-        if self.adv_compute_mode in ['tradition', 'gae2','gae'] and not eval_mode:
+        if self.adv_compute_mode in ['tradition', 'gae2','gae', 'iql2gae2'] and not eval_mode:
             # When tradition, return both action and state_value
             return *self.actor.get_action(h, eval_mode=eval_mode), self.value(h)
         return self.actor.get_action(h, eval_mode=eval_mode)
@@ -121,13 +121,6 @@ class PPOAgent2D(BaseAgent):
         bacth = rb.sample(mini_batch_size=256)
 
         obs, act, reward, done, returns, obs_ = to_torch(bacth, self.device)
-        # save obs as images
-        # obs = obs.permute(0, 2, 3, 1)
-        # obs = obs.cpu().numpy()
-        # save_path = '/data0/jzn/workspace/Off2On-Visual/train_img.png'
-        # from PIL import Image
-        # img = Image.fromarray((obs[0]).astype('uint8'))
-        # img.save(save_path)
 
         h = self.encoder(obs).flatten(start_dim=1)
 
@@ -171,7 +164,7 @@ class PPOAgent2D(BaseAgent):
                 q_loss.backward()
                 self.doubleq_optim.step()
 
-        elif self.adv_compute_mode == 'iql':
+        elif self.adv_compute_mode in ['iql','iql2gae', 'iql2gae2']:
             self.critic.update(h, act, reward, 1-done, h_)
     
     def bc_transfer_ac(self):
@@ -181,12 +174,10 @@ class PPOAgent2D(BaseAgent):
         if hasattr(self, 'value_optim'):
             del self.value_optim
 
-        if self.adv_compute_mode in ['iql2gae']:
+        if self.adv_compute_mode in ['iql2gae', 'iql2gae2']:
             self.value = deepcopy(self.critic._value)
             del self.critic
 
-        # params_list = list(self.actor.parameters()) + list(self.value.parameters()) + list(self.encoder.parameters())
-        # self.optim = optim.Adam(params_list, lr=self.online_lr)
         self.optim = optim.Adam([
             {'params': self.actor.parameters(), 'lr': self.online_lr},
             {'params': self.value.parameters(), 'lr': 1e-4},
@@ -294,7 +285,7 @@ class PPOAgent2D(BaseAgent):
                             target_q = rews[index] + (1-dones[index]) * 0.99 * torch.min(*self.doubleq(next_obss[index], next_act))
                         q1, q2 = self.doubleq(obss[index], acts[index])
                         q_loss = 0.5 * F.mse_loss(q1, target_q) + 0.5 * F.mse_loss(q2, target_q)
-                elif self.adv_compute_mode in ['gae','iql2gae']:
+                elif self.adv_compute_mode in ['gae','iql2gae','iql2gae2']:
                     state_value = self.value(obss[index])
                     if self.clip_vloss:
                         v_loss_unclipped = (state_value- v_target[index]) ** 2
@@ -323,6 +314,7 @@ class PPOAgent2D(BaseAgent):
                     break
                 
                 entropy_loss = -c.weight_entropy_loss * dist.entropy().sum(1, keepdim=True)
+                ratios = ratios.unsqueeze(1)
                 surrogate = -advantages[index] * ratios
                 surrogate_clipped = -advantages[index] * torch.clamp(ratios,
                                                        1.0 - self.clip_param, 1.0 + self.clip_param)
@@ -355,7 +347,6 @@ class PPOAgent2D(BaseAgent):
 
         # if self.ppo_cfg.use_lr_decay and iter is not None and max_iter is not None:
         #     self.lr_decay(iter, max_iter)
-        import pdb; pdb.set_trace()
 
         return {"policy_loss": policy_loss.item(), "value_loss": value_loss, "entropy_loss": entropy_loss.mean().item(),
                 "surrogate": surrogate.mean().item(), "surrogate_clipped": surrogate_clipped.mean().item(),

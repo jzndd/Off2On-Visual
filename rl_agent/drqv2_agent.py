@@ -80,9 +80,7 @@ class DrQv2Config:
     stddev_clip: float = 0.3
     use_data_aug: bool = True
     encoder_lr_scale: float = 1
-    stage2_update_encoder: bool = True # in this version, we will directly online
-    stage2_std: float = 0.1
-    stage3_update_encoder: bool = True
+    update_encoder: bool = True
     std0: float = 1.0
     std1: float = 0.1
     std_n_decay: int = 100000          # 0.1m
@@ -117,9 +115,6 @@ class DrQv2Agent(BaseAgent):
         self.offline_data_ratio = drqv2_cfg.offline_data_ratio
         self.mini_batch_size = drqv2_cfg.mini_batch_size
 
-        self.stage2_std = drqv2_cfg.stage2_std
-        self.stage2_update_encoder = drqv2_cfg.stage2_update_encoder
-
         self.bc_weight = drqv2_cfg.bc_weight
 
         if drqv2_cfg.std1 > drqv2_cfg.std0:
@@ -129,10 +124,10 @@ class DrQv2Agent(BaseAgent):
         self.stddev_clip = drqv2_cfg.stddev_clip
         self.use_data_aug = drqv2_cfg.use_data_aug
 
-        if drqv2_cfg.stage3_update_encoder and drqv2_cfg.encoder_lr_scale > 0:
-            self.stage3_update_encoder = True
+        if drqv2_cfg.update_encoder and drqv2_cfg.encoder_lr_scale > 0:
+            self.update_encoder = True
         else:
-            self.stage3_update_encoder = False
+            self.update_encoder = False
 
         self.act_dim = action_dim
 
@@ -189,40 +184,89 @@ class DrQv2Agent(BaseAgent):
         self.stage = 3
 
     def update(self, rb, step, expertrb):
-    # def update(self, batch, step):
-        # for stage 2 and 3, we use the same functions but with different hyperparameters
-        assert self.stage in (2, 3)
         metrics = dict()
 
-        if self.stage == 3 and step % self.update_every_steps != 0:
+        if step % self.update_every_steps != 0 or step < self.num_expl_steps:
             return metrics
 
-        if self.stage == 2:
-            bc_weight = self.bc_weight
+        bc_weight = 0
+
+        if self.offline_data_ratio > 0:
+            utd_ratio = self.utd_ratio
+            collect_batch = rb.sample(mini_batch_size=self.mini_batch_size * self.utd_ratio * (1-self.offline_data_ratio))
+            expert_batch = expertrb.sample(mini_batch_size=self.mini_batch_size * self.utd_ratio * self.offline_data_ratio)
+            batch = merge_batches(collect_batch, expert_batch)
+        else:
             utd_ratio = 1
-            # batch = expertrb.sample(mini_batch_size=self.mini_batch_size)
+            batch = rb.sample(mini_batch_size=self.mini_batch_size)
 
-            update_encoder = self.stage2_update_encoder
-            stddev = self.stage2_std
+        update_encoder = self.update_encoder
+        stddev = utils.schedule(self.stddev_schedule, step)
 
-        elif self.stage == 3:
-            bc_weight = 0
-            if step <= self.num_expl_steps:
-                return metrics
+        if len(batch) == 6:
+            obss, actions, rewards, dones_or_discounts, _, next_obss  = utils.to_torch(batch, device=self.device)
+        elif len(batch) == 5:
+            obss, actions, rewards, dones_or_discounts, next_obss = utils.to_torch(batch, device=self.device)
+        
+        if not torch.any(dones_or_discounts == 0.99):
+            discounts = (1-dones_or_discounts) * 0.99  # dones
+        else: 
+            discounts = dones_or_discounts             # discounts
 
-            if self.offline_data_ratio > 0:
-                utd_ratio = self.utd_ratio
-                collect_batch = next(rb)
-                expert_batch = next(expertrb)
-                # collect_batch = rb.sample(mini_batch_size=self.mini_batch_size * self.utd_ratio * (1-self.offline_data_ratio))
-                # expert_batch = expertrb.sample(mini_batch_size=self.mini_batch_size * self.utd_ratio * self.offline_data_ratio)
-                batch = merge_batches(collect_batch, expert_batch)
+        # augment
+        if self.use_data_aug:
+            obss = self.aug(obss.float())
+            next_obss = self.aug(next_obss.float())
+        else:
+            obss = obss.float()
+            next_obss = next_obss.float()
+
+        for i in range(utd_ratio):
+
+            obs, action, reward, next_obs, discount = self.slice(i, obss, actions, rewards, next_obss, discounts)
+
+            # encode
+            if update_encoder:
+                obs = self.encoder(obs).flatten(start_dim=1)
             else:
-                utd_ratio = 1
-                batch = rb.sample(mini_batch_size=self.mini_batch_size)
+                with torch.no_grad():
+                    obs = self.encoder(obs).flatten(start_dim=1)
 
-            update_encoder = self.stage3_update_encoder
-            stddev = utils.schedule(self.stddev_schedule, step)
+            with torch.no_grad():
+                next_obs = self.encoder(next_obs).flatten(start_dim=1)
+
+            # update critic
+            metrics.update(self.update_critic_drqv2(obs, action, reward.float(), discount, next_obs,
+                                                stddev, update_encoder,))
+
+        # update actor, following previous works, we do not use actor gradient for encoder update
+        metrics.update(self.update_actor_drqv2(obs.detach(), action, stddev, bc_weight))
+
+        metrics['batch_reward'] = reward.mean().item()
+
+        # update critic target networks
+        update_exponential_moving_average(self.critic_target, self.critic, self.critic_target_tau)
+        return metrics
+
+    def update_dl(self, rb, step, expertrb):
+        metrics = dict()
+
+        if step % self.update_every_steps != 0 or step < self.num_expl_steps:
+            return metrics
+
+        bc_weight = 0
+
+        if self.offline_data_ratio > 0:
+            utd_ratio = self.utd_ratio
+            collect_batch = next(rb)
+            expert_batch = next(expertrb)
+            batch = merge_batches(collect_batch, expert_batch)
+        else:
+            utd_ratio = 1
+            batch = rb.sample(mini_batch_size=self.mini_batch_size)
+
+        update_encoder = self.update_encoder
+        stddev = utils.schedule(self.stddev_schedule, step)
 
         # if self.stage == 2:
         if len(batch) == 6:

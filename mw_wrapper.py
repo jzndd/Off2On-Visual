@@ -10,7 +10,6 @@ import numpy as np
 import torch
 from torch import Tensor
 import mujoco
-# from .atari_preprocessing import AtariPreprocessing
 import sys
 import os
 
@@ -27,7 +26,7 @@ def make_mw_env(
     size: int,
     max_episode_steps: Optional[int] = 100,
     frame_skip: int = 2,
-    is_sparse_reward: bool = False,
+    is_sparse_reward: bool = True,
     frame_stack: int = 1,
 ) -> TorchEnv:
     
@@ -53,13 +52,15 @@ class MetaWorldEnv(gymnasium.Env):
 
     def __init__(self, task, frame_skip: int, device="cuda:0", 
                  screen_size=128, max_episode_steps=100,
-                 is_sparse_reward=True, frame_stack=1):
+                 is_sparse_reward=True, frame_stack=1,
+                 whole_traj=False):
         super(MetaWorldEnv, self).__init__()
 
         # init params
         self.is_sparse_reward = is_sparse_reward
         self.frame_skip = frame_skip
         self.frame_stack = frame_stack
+        self.whole_traj = whole_traj
 
         from metaworld.envs import (
             ALL_V2_ENVIRONMENTS_GOAL_OBSERVABLE,
@@ -128,30 +129,22 @@ class MetaWorldEnv(gymnasium.Env):
             state, reward, terminated, truncated, info = self.env.step(action)
             # if self.is_sparse_reward:
             #     reward = 1.0 if info["success"] else 0.0
+
             total_reward += reward
             if self.is_sparse_reward:
                 total_reward = 1.0 if info["success"] else 0.0
-            self.game_over = terminated
 
-            if info["success"]:
+            if info["success"] and not self.whole_traj:
                 terminated = 1.0
+
+            if self.cur_step >= self.max_episode_steps:
+                truncated = 1.0
 
             if terminated or truncated:
                 break
 
-            # if t == self.frame_skip - 2:
-            #     # cam_img = self.env.render()
-            #     # self.obs_buffer[1][i] = np.flipud(cam_img).copy()
-            #     self.obs_buffer[1] = self.get_rgb()
-            # elif t == self.frame_skip - 1:
-            #     # cam_img = self.env.render()
-            #     # self.obs_buffer[0][i] = np.flipud(cam_img).copy()
-            #     self.obs_buffer[0] = self.get_rgb()
         obs = self.get_rgb()
         self._obs_buffer.append(obs)
-
-        if self.cur_step >= self.max_episode_steps:
-            truncated = 1.0
 
         stack_obs = self._get_obs()
         # info["original_obs"] = original_obs
@@ -240,9 +233,6 @@ if __name__ == "__main__":
     mw_env = make_mw_env("button-press-topdown-v2", 10, device, 128, frame_stack=1)
     obs, info = mw_env.reset()
 
-    from mujoco import get_gl_backend
-    print("GL Backend in use:", get_gl_backend())  # 要看到 "EGL"
-    exit(1)
     step = 0
     traj = 0
     for i in range(120):

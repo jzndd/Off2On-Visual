@@ -48,8 +48,8 @@ class Trainer:
         self.registered_env_func = make_mani_env
         self.domain_name = 'maniskill'
 
-        env = self.registered_env_func(device=self._device, **cfg.env.train)
-        cfg.agent.actor_critic_cfg.num_actions = deepcopy(env.num_actions)
+        self.test_env = self.registered_env_func(device=self._device, **cfg.env.train)
+        cfg.agent.actor_critic_cfg.num_actions = deepcopy(self.test_env.num_actions)
         # cfg.agent.actor_critic_cfg.num_states = deepcopy(env.num_states)
 
         # self.test_env = self.registered_env_func(num_envs=1, device=self._device, **cfg.env.test)
@@ -165,27 +165,16 @@ class Trainer:
 
                         if 'final_info' in info.keys():
                             if isinstance(info['final_info']['success'], torch.Tensor):
-                                rew = info['final_info']['success'].detach().to(device=self._device, dtype=torch.float32)
+                                rew += info['final_info']['success'].detach().to(device=self._device, dtype=torch.float32)
                             else:
-                                rew = torch.tensor(info['final_info']['success'], device=self._device, dtype=torch.float32)
+                                rew += torch.tensor(info['final_info']['success'], device=self._device, dtype=torch.float32)
 
-                        if not self._cfg.is_whole_traj:
-                            rew = rew - 1
+                        rew = rew.clamp(0, 1)  # success is 1, else 0
+                        rew = rew - 1          # success is 0, else -1
 
                     rew = rew.view(-1)
                     done = torch.logical_or(terminated, trunc).to(dtype=torch.uint8)
                     rb.store(step, obs, rew, next_obs, done, real_act, old_log_prob, state_value)
-
-                    # if "final_info" in info:
-                    #     done_mask = info["_final_info"].to(self._device)
-                    #     info["final_observation"] = info["final_observation"].to(self._device)
-                    #     info["final_observation"] = info["final_observation"][done_mask]
-
-                    #     # for k in info["final_observation"]:
-                    #     #     info["final_observation"][k] = info["final_observation"][k][done_mask]
-                    #     with torch.no_grad():
-                    #         final_values[step, torch.arange(num_envs, device=self._device)[done_mask]] = self.agent.get_value(info["final_observation"]).view(-1)
-                    # rerference: https://github.com/Lizhi-sjtu/DRL-code-pytorch/blob/8f767b99ad44990b49f6acf3159660c5594db77e/5.PPO-continuous/PPO_continuous_main.py#L100
             
                     obs = next_obs
 
@@ -211,7 +200,7 @@ class Trainer:
 
     @torch.no_grad()
     def test_actor_critic(self, eval_times=25):
-        test_env = self.registered_env_func(device=self._device, **self._cfg.env.test)
+        test_env = self.test_env
         total_reward = 0.0
         success_rate = 0.0
         video_recorder = VideoRecorder(self._path_video_dir)

@@ -49,9 +49,7 @@ drqv2_cfg:
   stddev_clip: 0.3
   use_data_aug: true
   encoder_lr_scale: 1
-  stage2_update_encoder: true
-  stage2_std: 0.1
-  stage3_update_encoder: true
+  update_encoder: true
   std0: 1.0
   std1: 0.1
   std_n_decay: 500000

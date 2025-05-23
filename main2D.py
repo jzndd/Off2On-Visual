@@ -3,8 +3,6 @@ from pathlib import Path
 from typing import List, Union
 from omegaconf import DictConfig, OmegaConf
 import hydra
-os.environ["MUJOCO_GL"] = "egl"
-
 
 def run(cfg, root_dir):
     from trainer2D import Trainer
@@ -15,6 +13,8 @@ def run(cfg, root_dir):
 def main(cfg: DictConfig) -> None:
     setup_visible_cuda_devices(cfg.common.devices)
     root_dir = Path(hydra.utils.get_original_cwd())
+
+    cfg.wandb.mode = "disabled" 
 
     if cfg.debug_mode:
         cfg.wandb.mode = "disabled"         # If debug mode, disable use of wandb
@@ -29,7 +29,6 @@ def main(cfg: DictConfig) -> None:
         # cfg.training.online_max_iter = 2000
         # cfg.evaluation.every_iter = 1000
         # cfg.evaluation.eval_times = 1
-    cfg.training.online_max_iter = 4000000
 
     if cfg.only_bc:
         cfg.wandb.mode = "disabled"         # If debug mode, disable use of wandb

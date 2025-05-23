@@ -2,10 +2,9 @@ import os
 from pathlib import Path
 import random
 from typing import List, Tuple, Union
-
+import mujoco
 import cv2
 from mw_wrapper import make_mw_env
-# from dmc_wrapper_state import get_d4rl_env
 import torch
 from omegaconf import DictConfig, OmegaConf
 from rl_agent import PPOAgent2D
@@ -17,6 +16,8 @@ from utils import VideoRecorder, wandb_log, Normalization, to_np
 import sys
 
 from copy import deepcopy
+
+os.environ["MUJOCO_GL"] = "egl"
 
 class Trainer:
 
@@ -45,13 +46,11 @@ class Trainer:
         self.registered_env_func = make_mw_env
         self.domain_name = 'metaworld'
 
-        env = self.registered_env_func(device=self._device, **cfg.env.train)
+        env = make_mw_env(device=self._device, **cfg.env.train)
+        env.reset(seed=[random.randint(0, 2**31 - 1) for _ in range(env.num_envs)])
         cfg.agent.actor_critic_cfg.num_actions = deepcopy(env.num_actions)
-        # cfg.agent.actor_critic_cfg.num_states = deepcopy(env.num_states)
+        env.close()
 
-        # self.test_env = self.registered_env_func(num_envs=1, device=self._device, **cfg.env.test)
-        # obs, info = self.test_env.reset()
-        # init agent
         self.agent: PPOAgent2D = PPOAgent2D(cfg.agent.actor_critic_cfg, cfg.agent.ppo_cfg)
         self.agent.to(self._device)
         self.agent.setup_training(cfg.actor_critic.actor_critic_loss)
@@ -131,9 +130,7 @@ class Trainer:
         obs, _ = train_env.reset(seed=[random.randint(0, 2**31 - 1) for _ in range(num_envs)])
         done = torch.zeros((num_envs, ), device=self._device)
         epoch = 0
-            # 2 stage : ac update
-            # end_traj_flag = False
-            # while not done:
+
         while self.iter < max_iter:
 
             epoch += 1
@@ -156,9 +153,6 @@ class Trainer:
                         if not self._cfg.is_whole_traj:
                             rew = rew - 1
 
-                    # if not self._cfg.is_whole_traj:
-                    #     success_flag = rew + 1
-
                     rew = rew.view(-1)
                     done = torch.logical_or(terminated, trunc).to(dtype=torch.uint8)
 
@@ -180,7 +174,7 @@ class Trainer:
         
             # ------------------------------------ should test ? ---------------------------------
 
-            should_test = self._cfg.evaluation.should and (self.iter % self._cfg.evaluation.every_iter == 0)
+            should_test = self._cfg.evaluation.should and (epoch % self._cfg.evaluation.every == 0)
             if should_test:
                 print("begin test")
                 to_log += self.test_actor_critic(self._cfg.evaluation.eval_times)
@@ -197,8 +191,7 @@ class Trainer:
         success_rate = 0.0
         video_recorder = VideoRecorder(self._path_video_dir)
         for i in range(eval_times):
-            seed = random.randint(0, 2**31 - 1)
-            obs, _ = test_env.reset(seed=[seed + i for i in range(test_env.num_envs)])
+            obs, _ = test_env.reset()
             enabled=True if i==eval_times-1 else False
             video_recorder.init(obs, enabled=enabled)
             success = False
@@ -232,7 +225,6 @@ class Trainer:
                 success_rate += 1
 
             video_recorder.save(f"{self.iter}.mp4")
-            print("the {} traj success is {} and steps is {}".format(i, success, steps))
 
         success_rate = success_rate / eval_times
         avg_reward = total_reward / eval_times
@@ -245,15 +237,13 @@ class Trainer:
                 self.agent.set_old_policy()
 
         to_log = [{"success_rate": success_rate, "avg_reward": avg_reward}]
-        # import pdb; pdb.set_trace()
-        # T H W C -> T C H W
-        # save_frames = np.array(video_recorder.frames).transpose(0, 3, 1, 2)
-        # video_wandb = wandb.Video(save_frames, fps=video_recorder.fps, format="mp4")
-        # to_log.append({"video": video_wandb})
 
         print(f"{self._cfg.task} :Success rate: {success_rate}, Average reward: {avg_reward}")
         to_log = [{f"actor_critic/test/{k}": v for k, v in d.items()} for d in to_log]
         print("end test actor_critic")
+
+        test_env.close()
+        torch.cuda.empty_cache()
 
         return to_log
 

@@ -3,8 +3,6 @@ from pathlib import Path
 from typing import List, Union
 from omegaconf import DictConfig, OmegaConf
 import hydra
-os.environ["MUJOCO_GL"] = "egl"
-
 
 def run(cfg, root_dir):
     from trainer2D_meta_vector import Trainer

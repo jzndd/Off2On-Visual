@@ -11,7 +11,7 @@ from torch import Tensor
 from torch.distributions import Beta, Normal  
 from rl_agent.cm import ConsistencyModel 
 
-LOG_STD_BOUND = (-20,2)
+LOG_STD_BOUND = (-20,-2)
 
 # Trick 8: orthogonal initialization
 def orthogonal_init(layer, gain=1.0):
@@ -478,7 +478,7 @@ class DrQv2Actor(nn.Module):
             mean = self.actor_linear(x)
             if std is None:
                 log_std = self.log_std.expand_as(mean)
-                log_std = torch.clamp(log_std, LOG_STD_BOUND[0], LOG_STD_BOUND[1])
+                # log_std = torch.clamp(log_std, LOG_STD_BOUND[0], LOG_STD_BOUND[1])
                 std = torch.exp(log_std)
             else:
                 std = torch.ones_like(mean) * std
@@ -571,6 +571,7 @@ class Actorlog(nn.Module):
             mean = self.actor_linear(x)
             if std is None:
                 log_std = self.log_std.expand_as(mean)
+                log_std = torch.clamp(log_std, LOG_STD_BOUND[0], LOG_STD_BOUND[1])
                 std = torch.exp(log_std)
             else:
                 std = torch.ones_like(mean) * std

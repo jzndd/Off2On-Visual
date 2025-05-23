@@ -18,6 +18,8 @@ import sys
 
 from copy import deepcopy
 
+os.environ["MUJOCO_GL"] = "egl"
+
 class Trainer:
 
     def __init__(self, cfg, root_dir):
@@ -55,7 +57,7 @@ class Trainer:
         self.registered_env_func = make_mw_env
         self.domain_name = 'metaworld'
 
-        env = self.registered_env_func(num_envs=1,  device=self._device, **cfg.env.train)
+        env = self.registered_env_func(device=self._device, **cfg.env.train)
         cfg.agent.actor_critic_cfg.num_actions = deepcopy(env.num_actions)
         # cfg.agent.actor_critic_cfg.num_states = deepcopy(env.num_states)
 
@@ -85,7 +87,7 @@ class Trainer:
 
     def run(self):
         cfg = self._cfg
-        train_env = self.registered_env_func(num_envs=cfg.collection.train.num_envs, device=self._device, **cfg.env.train)
+        train_env = self.registered_env_func(device=self._device, **cfg.env.train)
     
         max_iter = self._cfg.training.online_max_iter
         bc_actor_warmup_steps = self._cfg.training.bc_actor_warmup_steps
@@ -167,6 +169,10 @@ class Trainer:
 
                     if self._cfg.is_sparse_reward:
                         rew = torch.tensor(info['success'], device=self._device, dtype=torch.float32)
+                        if "final_info" in info.keys():
+                            final_rew = [f["success"] if f is not None else 0.0 for f in info["final_info"]]
+                            rew += torch.tensor(final_rew, device=self._device, dtype=torch.float32)
+                        rew = rew.clamp(0, 1)
                         if not self._cfg.is_whole_traj:
                             rew = rew - 1
 
@@ -221,7 +227,7 @@ class Trainer:
 
     @torch.no_grad()
     def test_actor_critic(self, eval_times=25):
-        test_env = make_mw_env(num_envs=self._cfg.collection.test.num_envs, device=self._device, **self._cfg.env.test)
+        test_env = make_mw_env(device=self._device, **self._cfg.env.test)
         total_reward = 0.0
         success_rate = 0.0
         video_recorder = VideoRecorder(self._path_video_dir)
@@ -250,6 +256,9 @@ class Trainer:
                 total_reward += rew.sum().item()
 
                 success |= bool(info['success'])
+
+                if "final_info" in info:
+                    success |= bool(info["final_info"][0]["success"])
 
                 obs = next_obs
 
@@ -307,7 +316,7 @@ class Trainer:
         ckpt = torch.load(self.bc_ckpt_dir, self._device)
         self.agent.load_state_dict(ckpt["agent"])
 
-        train_env = self.registered_env_func(num_envs=1, device=self._device, **self._cfg.env.train)
+        train_env = self.registered_env_func(device=self._device, **self._cfg.env.train)
 
         success_trajs = 10 ; success_traj = 0
         random_trajs = 10 ; random_traj = 0
@@ -478,7 +487,7 @@ class Trainer:
         ckpt = torch.load(self.bc_ckpt_dir, self._device)
         self.agent.load_state_dict(ckpt["agent"])
 
-        train_env = self.registered_env_func(num_envs=1, device=self._device, **self._cfg.env.train)
+        train_env = self.registered_env_func(device=self._device, **self._cfg.env.train)
 
         success_trajs = 75 ; success_traj = 0         # 代表成功轨迹
         random_trajs = 75 ; random_traj = 0           # 代表失败轨迹
