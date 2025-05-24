@@ -114,6 +114,7 @@ class Trainer:
                     metrics = self.agent.bc_critic_update(expertrb)
 
                 to_log += self.test_actor_critic(self._cfg.evaluation.eval_times)
+                wandb_log(to_log, self.iter)
                 self.save_agents("bc", to_log[0]["actor_critic/test/avg_reward"])
 
                 os.makedirs(os.path.dirname(self.bc_ckpt_dir), exist_ok=True)

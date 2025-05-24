@@ -41,6 +41,7 @@ class PPOConfig:
     use_bc: bool = False
     target_kl: float = 0.2
     clip_vloss: bool = True
+    use_std_clip: bool = True
 
 class PPOAgent2D(BaseAgent):
     def __init__(
@@ -96,6 +97,7 @@ class PPOAgent2D(BaseAgent):
 
         self.ac_type = "ppo"
         self.fix_encoder = False
+        self.use_std_clip = ppo_cfg.use_std_clip
     
     @torch.no_grad()
     def predict_act(self, obs: torch.Tensor, eval_mode=False, **kwargss) -> ActorCriticOutput:
@@ -185,6 +187,7 @@ class PPOAgent2D(BaseAgent):
         ])
 
         self.fix_encoder = True
+        self.actor.log_std_clip = self.use_std_clip   # When online, clip log std to enable exploration
 
         self.set_old_policy()
         # self.encoder.requires_grad_(False)

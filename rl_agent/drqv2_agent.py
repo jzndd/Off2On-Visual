@@ -4,7 +4,7 @@
 from rl_agent.baseagent import ActorCriticConfig, BaseAgent
 from rl_agent.utils import update_exponential_moving_average, merge_batches
 
-from rl_agent.net import Actorlog, DoubleQMLP, DrQv2Actor, VRL3Actor, ActorCriticEncoder, EnsembleCritic
+from rl_agent.net import DrQv2Actor, ActorCriticEncoder, EnsembleCritic
 import numpy as np
 import torch
 import torch.nn as nn

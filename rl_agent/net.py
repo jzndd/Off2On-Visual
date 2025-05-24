@@ -542,6 +542,8 @@ class Actorlog(nn.Module):
             self.actor_linear = MLP(input_dim, cfg.hidden_dim, cfg.depth, cfg.num_actions, activation=cfg.acitive_fn, final_activation=None, last_gain=0.01)
             self.log_std = nn.Parameter(torch.zeros(1, cfg.num_actions))
 
+        self.log_std_clip = False
+
     def get_action(self, x: Tensor, eval_mode=False) -> Tensor:
         mean, std = self.forward(x)
         if eval_mode:
@@ -559,7 +561,7 @@ class Actorlog(nn.Module):
         mean, std = self.forward(x, std)
         return Normal(mean, std)
 
-    def forward(self, x: Tensor, std=None):
+    def forward(self, x: Tensor, std=None,):
         if self.use_trunk:
             x = self.trunk(x)
 
@@ -571,7 +573,8 @@ class Actorlog(nn.Module):
             mean = self.actor_linear(x)
             if std is None:
                 log_std = self.log_std.expand_as(mean)
-                log_std = torch.clamp(log_std, LOG_STD_BOUND[0], LOG_STD_BOUND[1])
+                if self.log_std_clip:
+                    log_std = torch.clamp(log_std, LOG_STD_BOUND[0], LOG_STD_BOUND[1])
                 std = torch.exp(log_std)
             else:
                 std = torch.ones_like(mean) * std

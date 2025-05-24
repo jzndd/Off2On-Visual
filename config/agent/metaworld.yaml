@@ -40,6 +40,7 @@ ppo_cfg:
   use_bc: False
   target_kl: 0.2
   clip_vloss: True
+  use_std_clip: True
 
 drqv2_cfg:
   __target__: DrQv2Config
