@@ -4,8 +4,13 @@ from typing import List, Union
 from omegaconf import DictConfig, OmegaConf
 import hydra
 
+os.environ['WANDB_BASE_URL']="https://api.wandb-cn.top"
+os.environ['WANDB_API_KEY']="338a1a94f799ce9a1470532e392f97fe330af917"
+
 def run(cfg, root_dir):
-    from trainer2D_meta_vector import Trainer
+    # from trainer2D_meta_vector import Trainer
+    # MODIFIED !!!!!!!!!!!!!
+    from trainer2D_meta_vector_discrete import Trainer
     trainer = Trainer(cfg, root_dir)
     trainer.run()
 
@@ -33,6 +38,8 @@ def main(cfg: DictConfig) -> None:
     if not cfg.save_data:
         if not cfg.is_sparse_reward:
             cfg.wandb.group += "_wosparse"
+        # MODIFIED !!!!!!!!!!!!!
+        cfg.wandb.group += f"_discrete_bin{cfg.bin}"
         run(cfg, root_dir)
     else:
         cfg.wandb.mode = "disabled"

@@ -544,7 +544,7 @@ class Actorlog(nn.Module):
 
         self.log_std_clip = False
 
-    def get_action(self, x: Tensor, eval_mode=False) -> Tensor:
+    def get_action(self, x: Tensor, eval_mode=False, is_continous_action=False, bin=21) -> Tensor:
         mean, std = self.forward(x)
         if eval_mode:
             action: Tensor = mean
@@ -554,6 +554,8 @@ class Actorlog(nn.Module):
             dist = Normal(mean, std)
             action: Tensor = dist.sample()
             action = torch.clamp(action, -1, 1)
+            if not is_continous_action:
+                action = utils.encode_metaworld_action_continous(action, bin=bin)
             log_prob = dist.log_prob(action)  # Summing over action dimensions
             return action, log_prob
         

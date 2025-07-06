@@ -21,6 +21,10 @@ frame_stack: 1
 
 num_until_update: 4000
 
+# for discrete action, set is_discrete_action to True
+bin: 21
+
+
 train_with_offline_data_mode: ${ac_type}       # rlpd is sepearate 2 buffer, vrl3 is use 1 buffer, drqv2 is not use, and drqv2offline is only use offliendata
 
 hydra:
@@ -34,12 +38,14 @@ common:
   seed: ${seed}
   resume: False # do not modify, set by scripts/resume.sh only.
 
+base_dir: /home/jzn/workspace/ppo_alg/Off2On-Visual
+
 ac_type: ppo  # Optional[ppo, bc, iql]
-offline_buffer: /data0/jzn/workspace/Off2On-Visual/data/${task}_${img_size}/expert_rb_with_reward.pkl
+offline_buffer: ${base_dir}/data/${task}_${img_size}/expert_rb_with_reward.pkl
 expert_rb_dir: ${offline_buffer}
 traj_num: 50
 
-bc_ckpt_dir: /data0/jzn/workspace/Off2On-Visual/ckpt/${task}_${ac_type}_2D_${agent.ppo_cfg.adv_compute_mode}/bc_seed${seed}_${traj_num}traj.pth
+bc_ckpt_dir: ${base_dir}/ckpt/${task}_${ac_type}_2D_${agent.ppo_cfg.adv_compute_mode}/bc_seed${seed}_${traj_num}traj.pth
 
 wandb:
   mode: online
@@ -85,9 +91,9 @@ training:
 
 evaluation:
   should: True
-  every: 5
-  every_iter: 20000
-  eval_times: 25
+  every: 10
+  every_iter: 50000
+  eval_times: 100
 
 actor_critic:
   training:
@@ -106,7 +112,7 @@ actor_critic:
     gamma: 0.985
     lambda_: 0.95
     weight_value_loss: 1.0
-    weight_entropy_loss: 0.01
+    weight_entropy_loss: 0.0
     weight_bc_loss: 0.1
     is_continuous_action: true
 

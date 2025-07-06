@@ -100,13 +100,13 @@ class PPOAgent2D(BaseAgent):
         self.use_std_clip = ppo_cfg.use_std_clip
     
     @torch.no_grad()
-    def predict_act(self, obs: torch.Tensor, eval_mode=False, **kwargss) -> ActorCriticOutput:
+    def predict_act(self, obs: torch.Tensor, eval_mode=False, is_continous_action=True, bin=21,**kwargss) -> ActorCriticOutput:
         assert obs.ndim == 4  # Ensure observation shape is correct
         h = self.encoder(obs).flatten(start_dim=1)
         if self.adv_compute_mode in ['tradition', 'gae2','gae', 'iql2gae2'] and not eval_mode:
             # When tradition, return both action and state_value
-            return *self.actor.get_action(h, eval_mode=eval_mode), self.value(h)
-        return self.actor.get_action(h, eval_mode=eval_mode)
+            return *self.actor.get_action(h, eval_mode=eval_mode, is_continous_action=is_continous_action, bin=bin), self.value(h)
+        return self.actor.get_action(h, eval_mode=eval_mode, is_continous_action=is_continous_action, bin=bin)
     
     def get_value(self, obs: torch.Tensor) -> torch.Tensor:
         assert obs.ndim == 4
@@ -433,8 +433,8 @@ class PPOAgent2D(BaseAgent):
                     approx_kl = ((ratios - 1) - logratio).mean()
                     clipfracs += [((ratios - 1.0).abs() > self.clip_param).float().mean().item()]
         
-                if approx_kl > self.target_kl:
-                    break
+                # if approx_kl > self.target_kl:
+                #     break
                 
                 entropy_loss = -c.weight_entropy_loss * dist.entropy().sum(1, keepdim=True)
                 surrogate = -b_advantages[index] * ratios

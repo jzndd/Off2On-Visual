@@ -28,7 +28,7 @@ def main(cfg: DictConfig) -> None:
         cfg.training.bc_critic_warmup_steps = 10
         # cfg.training.online_max_iter = 2000
         # cfg.evaluation.every_iter = 1000
-        # cfg.evaluation.eval_times = 1
+        cfg.evaluation.eval_times = 1
 
     if cfg.only_bc:
         cfg.wandb.mode = "disabled"         # If debug mode, disable use of wandb

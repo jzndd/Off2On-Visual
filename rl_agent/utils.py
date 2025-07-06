@@ -1181,6 +1181,30 @@ class EfficientReplayBufferV2:
             self.size = len(data['obs'])
         print(f"Buffer loaded from {filepath}")
 
+ACTION_DIM_POSSIBLES_21 = np.array([ -1 + i * 0.1 for i in range(21)])
+ACTION_DIM_POSSIBLES_256 = np.array([ -1 + i * 0.007843137 for i in range(256)])
+ACTION_DIM_POSSIBLES_101 = np.array([ -1 + i * 0.02 for i in range(101)])
+
+def encode_metaworld_action_continous(actions, bin=21) -> torch.Tensor:
+    if bin == 21:
+        # raise ValueError("21 is not supported")
+        ACTION_DIM_POSSIBLES = torch.tensor(ACTION_DIM_POSSIBLES_21, dtype=torch.float32, device=actions.device)
+    elif bin == 256:
+        ACTION_DIM_POSSIBLES = torch.tensor(ACTION_DIM_POSSIBLES_256, dtype=torch.float32, device=actions.device)
+    elif bin == 101:
+        ACTION_DIM_POSSIBLES = torch.tensor(ACTION_DIM_POSSIBLES_101, dtype=torch.float32, device=actions.device)
+
+    # Ensure actions is a float tensor and move to the same device
+    actions = actions.to(dtype=torch.float32, device=ACTION_DIM_POSSIBLES.device)
+
+    # Compute the absolute differences to find the closest match
+    differences = torch.abs(actions.unsqueeze(-1) - ACTION_DIM_POSSIBLES)  # Shape: (batch_size, 4, 21) or (4, 21)
+
+    action_indices = torch.argmin(differences, dim=-1)  # Shape: (batch_size, 4) or (4,)
+
+    encode_action = ACTION_DIM_POSSIBLES[action_indices]
+    return encode_action
+
 # test
 if __name__ == "__main__":
     # test compute_returns

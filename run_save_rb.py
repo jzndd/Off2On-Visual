@@ -367,7 +367,8 @@ if __name__ == "__main__":
     #          use_sparse_reward=use_sparse_reward,
     #          save_whole_traj=save_whole_traj,
     #          frame_stack=frame_stack,
-    #          save_float=save_float)
+    #          save_float=save_float,
+    #          img_size=img_size)
 
     # from metaworld.envs.mujoco.sawyer_xyz.v2 import SawyerDoorCloseEnvV2 as Env          # Failed
     # from metaworld.policies import SawyerDoorCloseV2Policy as EnvPolicy
@@ -484,6 +485,8 @@ if __name__ == "__main__":
     #          use_random=use_random, 
     #          use_sparse_reward=use_sparse_reward,
     #          save_whole_traj=save_whole_traj,
+    #          frame_stack=frame_stack,
+    #          save_float=save_float,
     #          img_size=img_size)
 
     # from metaworld.envs.mujoco.sawyer_xyz.v2 import SawyerHandlePullEnvV2 as Env           # Failed
@@ -494,18 +497,21 @@ if __name__ == "__main__":
     #          use_random=use_random, 
     #          use_sparse_reward=use_sparse_reward,
     #          save_whole_traj=save_whole_traj,
+    #          frame_stack=frame_stack,
+    #          save_float=save_float,
     #          img_size=img_size)
 
-    # from metaworld.envs.mujoco.sawyer_xyz.v2 import SawyerLeverPullEnvV2 as Env           # Success
-    # from metaworld.policies import  SawyerLeverPullV2Policy as EnvPolicy
-    # policy = EnvPolicy()
-    # env_name = 'lever-pull-v2'
-    # gen_traj(policy, env_seed, env_name, traj_num, dataset_name, save_data=save_data, 
-    #          use_random=use_random, 
-    #          use_sparse_reward=use_sparse_reward,
-    #          save_whole_traj=save_whole_traj,
-    #          frame_stack=frame_stack,
-    #          save_float=save_float)
+    from metaworld.envs.mujoco.sawyer_xyz.v2 import SawyerLeverPullEnvV2 as Env           # Success
+    from metaworld.policies import  SawyerLeverPullV2Policy as EnvPolicy
+    policy = EnvPolicy()
+    env_name = 'lever-pull-v2'
+    gen_traj(policy, env_seed, env_name, traj_num, dataset_name, save_data=save_data, 
+             use_random=use_random, 
+             use_sparse_reward=use_sparse_reward,
+             save_whole_traj=save_whole_traj,
+             frame_stack=frame_stack,
+             img_size=img_size,
+             save_float=save_float)
 
     # from metaworld.envs.mujoco.sawyer_xyz.v2 import SawyerPegInsertionSideEnvV2 as Env           # Failed
     # from metaworld.policies import  SawyerPegInsertionSideV2Policy as EnvPolicy
@@ -517,16 +523,16 @@ if __name__ == "__main__":
     #          save_whole_traj=save_whole_traj,
     #          img_size=img_size)
 
-    from metaworld.envs.mujoco.sawyer_xyz.v2 import SawyerPegUnplugSideEnvV2 as Env           # Failed
-    from metaworld.policies import  SawyerPegUnplugSideV2Policy as EnvPolicy
-    policy = EnvPolicy()
-    env_name = 'peg-unplug-side-v2'
-    gen_traj(policy, env_seed, env_name, traj_num, dataset_name, save_data=save_data, 
-             use_random=use_random, 
-             use_sparse_reward=use_sparse_reward,
-             save_whole_traj=save_whole_traj,
-             frame_stack=frame_stack,
-             save_float=save_float)
+    # from metaworld.envs.mujoco.sawyer_xyz.v2 import SawyerPegUnplugSideEnvV2 as Env           # Failed
+    # from metaworld.policies import  SawyerPegUnplugSideV2Policy as EnvPolicy
+    # policy = EnvPolicy()
+    # env_name = 'peg-unplug-side-v2'
+    # gen_traj(policy, env_seed, env_name, traj_num, dataset_name, save_data=save_data, 
+    #          use_random=use_random, 
+    #          use_sparse_reward=use_sparse_reward,
+    #          save_whole_traj=save_whole_traj,
+    #          frame_stack=frame_stack,
+    #          save_float=save_float)
 
 
     # from metaworld.envs.mujoco.sawyer_xyz.v2 import SawyerPickOutOfHoleEnvV2 as Env           # Failed
@@ -601,16 +607,16 @@ if __name__ == "__main__":
     #          save_float=save_float)
 
     
-    from metaworld.envs.mujoco.sawyer_xyz.v2 import SawyerPushBackEnvV2 as Env
-    from metaworld.policies import SawyerPushBackV2Policy as EnvPolicy
-    policy = EnvPolicy()
-    env_name = 'push-back-v2'
-    gen_traj(policy, env_seed, env_name, traj_num, dataset_name, save_data=save_data, 
-             use_random=use_random, 
-             use_sparse_reward=use_sparse_reward,
-             save_whole_traj=save_whole_traj,
-             frame_stack=frame_stack,
-             save_float=save_float)
+    # from metaworld.envs.mujoco.sawyer_xyz.v2 import SawyerPushBackEnvV2 as Env
+    # from metaworld.policies import SawyerPushBackV2Policy as EnvPolicy
+    # policy = EnvPolicy()
+    # env_name = 'push-back-v2'
+    # gen_traj(policy, env_seed, env_name, traj_num, dataset_name, save_data=save_data, 
+    #          use_random=use_random, 
+    #          use_sparse_reward=use_sparse_reward,
+    #          save_whole_traj=save_whole_traj,
+    #          frame_stack=frame_stack,
+    #          save_float=save_float)
 
     # from metaworld.envs.mujoco.sawyer_xyz.v2 import SawyerPushEnvV2 as Env
     # from metaworld.policies import SawyerPushV2Policy as EnvPolicy
@@ -652,16 +658,16 @@ if __name__ == "__main__":
     #          save_whole_traj=save_whole_traj,
     #          img_size=img_size)
 
-    from metaworld.envs.mujoco.sawyer_xyz.v2 import SawyerShelfPlaceEnvV2 as Env
-    from metaworld.policies import SawyerShelfPlaceV2Policy as EnvPolicy
-    policy = EnvPolicy()
-    env_name = 'shelf-place-v2'
-    gen_traj(policy, env_seed, env_name, traj_num, dataset_name, save_data=save_data, 
-             use_random=use_random, 
-             use_sparse_reward=use_sparse_reward,
-             save_whole_traj=save_whole_traj,
-             frame_stack=frame_stack,
-             save_float=save_float)
+    # from metaworld.envs.mujoco.sawyer_xyz.v2 import SawyerShelfPlaceEnvV2 as Env
+    # from metaworld.policies import SawyerShelfPlaceV2Policy as EnvPolicy
+    # policy = EnvPolicy()
+    # env_name = 'shelf-place-v2'
+    # gen_traj(policy, env_seed, env_name, traj_num, dataset_name, save_data=save_data, 
+    #          use_random=use_random, 
+    #          use_sparse_reward=use_sparse_reward,
+    #          save_whole_traj=save_whole_traj,
+    #          frame_stack=frame_stack,
+    #          save_float=save_float)
 
     # from metaworld.envs.mujoco.sawyer_xyz.v2 import SawyerSoccerEnvV2 as Env
     # from metaworld.policies import SawyerSoccerV2Policy as EnvPolicy
