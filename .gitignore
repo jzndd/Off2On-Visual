@@ -13,3 +13,11 @@ ckpt/*
 *.sh
 
 data_/
+
+logs/*
+reward_logs/*
+collect_logs/*
+
+reward_logs/*
+
+rl_agent/__pycache__/*

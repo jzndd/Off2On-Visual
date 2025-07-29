@@ -13,13 +13,14 @@ from torch import Tensor
 def make_mani_env(id, device, size, num_envs, 
                   partial_reset=True,
                   reconfiguration_freq=None,
-                  max_episode_steps=50,):
+                  max_episode_steps=50,
+                  control_mode="pd_ee_delta_pose",):
     # default args
     reconfiguration_freq = None
 
     env_kwargs = dict(obs_mode="rgb", render_mode="rgb_array", 
                       sim_backend="physx_cuda", 
-                      control_mode="pd_joint_delta_pos", reward_mode='sparse',)
+                      control_mode=control_mode, reward_mode='sparse',)
     # eval_envs = gym.make(args.env_id, num_envs=args.num_eval_envs, reconfiguration_freq=args.eval_reconfiguration_freq, **env_kwargs)
     envs = gym.make(id, num_envs=num_envs, 
                     reconfiguration_freq=reconfiguration_freq, 

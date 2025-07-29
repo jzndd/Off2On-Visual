@@ -13,8 +13,10 @@ is_sparse_reward: True
 is_whole_traj: True
 
 save_data: False
+save_reward_data: False
+save_multi_data: False
 only_bc: False
-img_size: 96
+img_size: 64
 
 train_with_bc: True
 frame_stack: 1
@@ -38,12 +40,12 @@ common:
   seed: ${seed}
   resume: False # do not modify, set by scripts/resume.sh only.
 
-base_dir: /home/jzn/workspace/ppo_alg/Off2On-Visual
+base_dir: /data/home/jzn/workspace/Off2On-Visual
 
 ac_type: ppo  # Optional[ppo, bc, iql]
 offline_buffer: ${base_dir}/data/${task}_${img_size}/expert_rb_with_reward.pkl
 expert_rb_dir: ${offline_buffer}
-traj_num: 50
+traj_num: 20
 
 bc_ckpt_dir: ${base_dir}/ckpt/${task}_${ac_type}_2D_${agent.ppo_cfg.adv_compute_mode}/bc_seed${seed}_${traj_num}traj.pth
 

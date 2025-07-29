@@ -11,4 +11,6 @@ test:
   frame_skip: 2
   frame_stack: ${frame_stack}
   num_envs: 1
+  whole_traj: ${is_whole_traj}
+  
 

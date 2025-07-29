@@ -5,9 +5,11 @@ from omegaconf import DictConfig, OmegaConf
 import hydra
 os.environ["MUJOCO_GL"] = "egl"
 
+# os.environ['WANDB_BASE_URL']="https://api.wandb-cn.top"
+os.environ['WANDB_API_KEY']="338a1a94f799ce9a1470532e392f97fe330af917"
 
 def run(cfg, root_dir):
-    from trainer2D_maniskill_vector import Trainer
+    from trainer2D_maniskill_vector_discrete import Trainer
     trainer = Trainer(cfg, root_dir)
     trainer.run()
 
@@ -32,15 +34,24 @@ def main(cfg: DictConfig) -> None:
     if cfg.only_bc:
         cfg.wandb.mode = "disabled"         # If debug mode, disable use of wandb
     
-    if not cfg.save_data:
+    if not cfg.save_data and not cfg.save_reward_data:
         if not cfg.is_sparse_reward:
             cfg.wandb.group += "_wosparse"
         run(cfg, root_dir)
-    else:
+    elif cfg.save_data and not cfg.save_reward_data:
         cfg.wandb.mode = "disabled"
+        from trainer2D_maniskill_vector_discrete import Trainer
         trainer = Trainer(cfg, root_dir)
         trainer.save_data()
         trainer.save_eval_data()
+    elif not cfg.save_data and cfg.save_reward_data:
+        cfg.wandb.mode = "disabled"
+        from trainer2D_maniskill_vector_discrete import Trainer
+        trainer = Trainer(cfg, root_dir)
+        # trainer.save_reward_data()
+        trainer.save_reward_data(np_seed=42, test_mode=True)
+    else:
+        raise NotImplementedError("Only save_data and save_reward_data are supported")
 
 def setup_visible_cuda_devices(devices: Union[str, int, List[int]]) -> None:
     if isinstance(devices, str):

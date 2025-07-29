@@ -5,6 +5,7 @@ train:
   partial_reset: True
   reconfiguration_freq: null
   max_episode_steps: 30
+  control_mode: ${control_mode}
 
 
 test:
@@ -13,4 +14,5 @@ test:
   num_envs: 1
   partial_reset: True
   reconfiguration_freq: 1
+  control_mode: ${control_mode}
 

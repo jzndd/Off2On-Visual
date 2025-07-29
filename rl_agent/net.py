@@ -542,7 +542,7 @@ class Actorlog(nn.Module):
             self.actor_linear = MLP(input_dim, cfg.hidden_dim, cfg.depth, cfg.num_actions, activation=cfg.acitive_fn, final_activation=None, last_gain=0.01)
             self.log_std = nn.Parameter(torch.zeros(1, cfg.num_actions))
 
-        self.log_std_clip = False
+        self.log_std_clip = True
 
     def get_action(self, x: Tensor, eval_mode=False, is_continous_action=False, bin=21) -> Tensor:
         mean, std = self.forward(x)
@@ -592,7 +592,10 @@ class ActorCriticEncoder(nn.Module):
         super().__init__()
 
         # self.repr_dim = 32 * 57 * 57
-        if cfg.img_size == 84:
+        if cfg.img_size == 64:
+            # 64 * 64 * 3 input
+            self.repr_dim = 32 * 25 * 25
+        elif cfg.img_size == 84:
             # 84 * 84 * 3 input
             self.repr_dim = 32 * 35 * 35
         elif cfg.img_size == 96:

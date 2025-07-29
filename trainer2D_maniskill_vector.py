@@ -48,7 +48,7 @@ class Trainer:
         self.registered_env_func = make_mani_env
         self.domain_name = 'maniskill'
 
-        self.test_env = self.registered_env_func(device=self._device, **cfg.env.train)
+        self.test_env = self.registered_env_func(device=self._device, **cfg.env.test)
         cfg.agent.actor_critic_cfg.num_actions = deepcopy(self.test_env.num_actions)
         # cfg.agent.actor_critic_cfg.num_states = deepcopy(env.num_states)
 

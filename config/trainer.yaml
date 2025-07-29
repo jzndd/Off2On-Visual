@@ -9,7 +9,7 @@ task: disassemble-v2
 
 use_trunk: False
 
-img_size: 96
+img_size: 64
 
 hydra:
   run:

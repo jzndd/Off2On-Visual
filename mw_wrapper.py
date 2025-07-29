@@ -26,8 +26,9 @@ def make_mw_env(
     size: int,
     max_episode_steps: Optional[int] = 100,
     frame_skip: int = 2,
-    is_sparse_reward: bool = True,
+    is_sparse_reward: bool = False,
     frame_stack: int = 1,
+    whole_traj: bool = False,
 ) -> TorchEnv:
     
     if isinstance(size, ListConfig):
@@ -36,11 +37,11 @@ def make_mw_env(
 
     def env_fn():
         env = MetaWorldEnv(id, frame_skip, device, size, max_episode_steps, is_sparse_reward,
-                           frame_stack=frame_stack)
+                           frame_stack=frame_stack, whole_traj=whole_traj)
         return env
 
     # TODO: AsyncVectorEnv IN metaworld ?
-    env = AsyncVectorEnv([env_fn for _ in range(num_envs)])
+    env = SyncVectorEnv([env_fn for _ in range(num_envs)])
     # env = env_fn()
 
     env = TorchEnv(env, device)
@@ -52,7 +53,7 @@ class MetaWorldEnv(gymnasium.Env):
 
     def __init__(self, task, frame_skip: int, device="cuda:0", 
                  screen_size=128, max_episode_steps=100,
-                 is_sparse_reward=True, frame_stack=1,
+                 is_sparse_reward=False, frame_stack=1,
                  whole_traj=False):
         super(MetaWorldEnv, self).__init__()
 
@@ -235,7 +236,7 @@ if __name__ == "__main__":
 
     step = 0
     traj = 0
-    for i in range(120):
+    for i in range(10):
         action = torch.rand((10, 4))
         obs, rew, end, trunc, loop_info = mw_env.step(action)
         step += 1
@@ -245,6 +246,8 @@ if __name__ == "__main__":
     print("trunc", trunc)
     print("obs", obs.shape)
     print("traj", traj) 
+
+    mw_env.close()
 
     # print(obs.shape)
     # obs_np = obs[ :, :, -3:].add(1).div(2).mul(255).byte().permute(2,0,1).cpu().numpy()

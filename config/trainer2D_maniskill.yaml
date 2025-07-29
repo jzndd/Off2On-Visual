@@ -13,13 +13,21 @@ is_sparse_reward: True
 is_whole_traj: True
 
 save_data: False
+save_reward_data: False
 only_bc: False
-img_size: 96
+img_size: 128
 
 train_with_bc: True
 frame_stack: 1
 
 num_until_update: 4000
+
+## for maniskill
+control_mode: pd_ee_delta_pose # Options: pd_joint_delta_pos(8维), pd_ee_delta_pose(7维), pd_ee_delta_pos(4维)
+## end for maniskill
+
+# for discrete action, set is_discrete_action to True
+bin: 21
 
 train_with_offline_data_mode: ${ac_type}       # rlpd is sepearate 2 buffer, vrl3 is use 1 buffer, drqv2 is not use, and drqv2offline is only use offliendata
 
@@ -34,14 +42,13 @@ common:
   seed: ${seed}
   resume: False # do not modify, set by scripts/resume.sh only.
 
-base_dir: /home/jzn/workspace/ppo_alg/Off2On-Visual`
+base_dir: /data/home/jzn/workspace/Off2On-Visual
 
 ac_type: ppo  # Optional[ppo, bc, iql]
-offline_buffer: ${base_dir}/data/${task}_${img_size}/expert_rb_with_reward.pkl
-expert_rb_dir: ${offline_buffer}
+expert_rb_dir: ${base_dir}/data/${task}_${img_size}/expert_rb_with_reward_${control_mode}.pkl
 traj_num: 50
 
-bc_ckpt_dir: ${base_dir}/ckpt/${task}_${ac_type}_2D_${agent.ppo_cfg.adv_compute_mode}/bc_seed${seed}_${traj_num}traj.pth
+bc_ckpt_dir: ${base_dir}/ckpt/${task}_${ac_type}_2D_${agent.ppo_cfg.adv_compute_mode}/bc_seed${seed}_${traj_num}traj_${control_mode}.pth
 
 wandb:
   mode: online
